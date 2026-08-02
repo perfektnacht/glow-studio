@@ -1,0 +1,20 @@
+#!/bin/bash
+# Toggle the Lite-Brite board. Bind this to a key, or call it from a script.
+#
+#   omarchy-lite-brite          toggle
+#   omarchy-lite-brite show     open
+#   omarchy-lite-brite hide     close
+
+set -euo pipefail
+
+PLUGIN_ID="perfektnacht.lite-brite"
+
+case "${1:-toggle}" in
+  show) omarchy-shell shell summon "$PLUGIN_ID" '{}' ;;
+  hide) omarchy-shell shell hide "$PLUGIN_ID" ;;
+  toggle) omarchy-shell shell toggle "$PLUGIN_ID" '{}' ;;
+  *)
+    echo "usage: ${0##*/} [toggle|show|hide]" >&2
+    exit 1
+    ;;
+esac
