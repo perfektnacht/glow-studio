@@ -5,7 +5,7 @@ A glowing peg board for [Omarchy](https://omarchy.org), in the spirit of the
 behind it. It opens pre-lit with the OMARCHY wordmark in green and you draw
 over it, or clear it and start from nothing.
 
-![the board](screenshot_border.png)
+![the board](pluginpreview.png)
 
 ## Install
 
