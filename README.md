@@ -15,13 +15,6 @@ omarchy plugin enable perfektnacht.lite-brite right
 omarchy restart shell
 ```
 
-Click the grid icon in the bar to open the board. To bind it to a key instead,
-add to `~/.config/hypr/bindings.conf`:
-
-```
-bindd = SUPER, B, Lite-Brite, exec, omarchy-shell shell toggle perfektnacht.lite-brite '{}'
-```
-
 `bin/omarchy-lite-brite` wraps the same call if you'd rather have a command
 (`toggle`, `show`, `hide`) on your `PATH`.
 
