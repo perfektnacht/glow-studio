@@ -143,6 +143,32 @@ half-block characters (`▀`, `▄`) carry vertical sub-cell detail, so expandin
 2:1 aspect instead of squashing them onto the terminal's cell grid. The result
 is 81 × 19 pegs, centered on the board.
 
+## Security
+
+Reviewed against the [Omarchy Plugin Marketplace][mp]'s pre-submission security
+scan on 19 August 2026, at commit `d55e9dc`.
+
+**This is a self-review, not a marketplace audit.** Nobody from the marketplace
+has reviewed this repository. Omarchy plugins run unsandboxed as upstream code,
+so no scan — this one included — makes a plugin safe. It is published so you can
+check the claims rather than take them.
+
+**No code changes were needed.** What the scan confirmed:
+
+- No network access of any kind — no URLs, no remote images, no downloads.
+- No shell strings. The two external commands it runs, `notify-send` and
+  `mkdir`, are passed as argument arrays with fixed arguments.
+- Two paths are written, both listed under [Requirements](#requirements), and
+  nothing outside them.
+- No credentials, no privileged commands, no bundled binaries, no dependencies
+  beyond what Omarchy already ships.
+
+Found something this missed? Report it privately through the marketplace's
+[security policy][sec], or open an issue here.
+
+[mp]: https://github.com/HANCORE-linux/omarchy-plugin-marketplace
+[sec]: https://github.com/HANCORE-linux/omarchy-plugin-marketplace/blob/main/SECURITY.md
+
 ## License
 
 MIT
