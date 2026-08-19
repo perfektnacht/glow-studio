@@ -18,6 +18,42 @@ omarchy restart shell
 `bin/omarchy-lite-brite` wraps the same call if you'd rather have a command
 (`toggle`, `show`, `hide`) on your `PATH`.
 
+## Requirements
+
+Omarchy 4 or newer, which provides `omarchy-shell` and the Quickshell runtime
+this is written against. Nothing is bundled, vendored, or installed on your
+behalf.
+
+Two system commands are used, both already present on an Omarchy install:
+
+| Command | Used for | Without it |
+|---------|----------|------------|
+| `notify-send` | Saying where an export landed | Exports still work, just silently |
+| `mkdir` | Creating `~/Pictures` before the first export | The export fails rather than guessing another directory |
+
+Nothing else is read or written, and the plugin makes no network connections
+of any kind. Two paths belong to it:
+
+- `~/.local/state/omarchy/lite-brite.json` — your board as you draw it, plus
+  the export size and OLED choice
+- `~/Pictures/lite-brite-<size>-<timestamp>.png` — exports, only when you ask
+
+## Removal
+
+```bash
+omarchy plugin remove perfektnacht.lite-brite
+```
+
+That disables it and deletes the plugin directory. Your board is deliberately
+kept: it lives outside the checkout, so removing and reinstalling brings the
+drawing back exactly as you left it. To clear that too:
+
+```bash
+rm ~/.local/state/omarchy/lite-brite.json
+```
+
+Exports in `~/Pictures` are yours and are never touched by removal.
+
 ## Drawing
 
 Mouse and keyboard steer the same cursor — the ring on the board is always
