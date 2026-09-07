@@ -5,7 +5,7 @@ import qs.Ui
 // Bar entry point: a peg-grid glyph that toggles the board.
 BarWidget {
   id: root
-  moduleName: "perfektnacht.lite-brite"
+  moduleName: "perfektnacht.glow-studio"
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -17,11 +17,11 @@ BarWidget {
     // nf-fa-th — a 3x3 grid, which is as close to a peg board as the icon
     // font gets.
     text: ""
-    tooltipText: "Lite-Brite"
+    tooltipText: "Glow Studio"
     onPressed: function(pressedButton) {
       if (!root.bar) return
       if (pressedButton !== Qt.LeftButton) return
-      root.bar.run("omarchy-shell shell toggle perfektnacht.lite-brite '{}'")
+      root.bar.run("omarchy-shell shell toggle perfektnacht.glow-studio '{}'")
     }
   }
 }

@@ -1,4 +1,4 @@
-# Lite-Brite
+# Glow Studio
 
 A glowing peg board for [Omarchy](https://omarchy.org), in the spirit of the
 1967 toy: a black perforated sheet, eight translucent peg colors, and a light
@@ -11,11 +11,11 @@ over it, or clear it and start from nothing.
 
 ```bash
 omarchy plugin add https://github.com/perfektnacht/brite-plugin.git
-omarchy plugin enable perfektnacht.lite-brite right
+omarchy plugin enable perfektnacht.glow-studio right
 omarchy restart shell
 ```
 
-`bin/omarchy-lite-brite` wraps the same call if you'd rather have a command
+`bin/omarchy-glow-studio` wraps the same call if you'd rather have a command
 (`toggle`, `show`, `hide`) on your `PATH`.
 
 ## Requirements
@@ -34,14 +34,18 @@ Two system commands are used, both already present on an Omarchy install:
 Nothing else is read or written, and the plugin makes no network connections
 of any kind. Two paths belong to it:
 
-- `~/.local/state/omarchy/lite-brite.json` — your board as you draw it, plus
+- `~/.local/state/omarchy/glow-studio.json` — your board as you draw it, plus
   the export size and OLED choice
-- `~/Pictures/lite-brite-<size>-<timestamp>.png` — exports, only when you ask
+- `~/Pictures/glow-studio-<size>-<timestamp>.png` — exports, only when you ask
+
+If you ran this plugin under its previous name, the board saved back then is
+read once and carried over the first time you open Glow Studio. The old file is
+left on disk rather than deleted, so nothing is lost either way.
 
 ## Removal
 
 ```bash
-omarchy plugin remove perfektnacht.lite-brite
+omarchy plugin remove perfektnacht.glow-studio
 ```
 
 That disables it and deletes the plugin directory. Your board is deliberately
@@ -49,7 +53,7 @@ kept: it lives outside the checkout, so removing and reinstalling brings the
 drawing back exactly as you left it. To clear that too:
 
 ```bash
-rm ~/.local/state/omarchy/lite-brite.json
+rm ~/.local/state/omarchy/glow-studio.json
 ```
 
 Exports in `~/Pictures` are yours and are never touched by removal.
@@ -76,13 +80,13 @@ where the brush will land, whichever one you last touched.
 | `Ctrl+S` | export a PNG to `~/Pictures` |
 | `Esc` | close |
 
-The board autosaves to `~/.local/state/omarchy/lite-brite.json` a moment after
+The board autosaves to `~/.local/state/omarchy/glow-studio.json` a moment after
 every stroke, so it comes back exactly as you left it. Delete that file to
 start over from the logo.
 
 ## Wallpapers
 
-`Export PNG` (or `Ctrl+S`) writes to `~/Pictures/lite-brite-<size>-<stamp>.png`
+`Export PNG` (or `Ctrl+S`) writes to `~/Pictures/glow-studio-<size>-<stamp>.png`
 at whichever size is selected in the toolbar. Your choice is remembered.
 
 | | |
@@ -90,7 +94,7 @@ at whichever size is selected in the toolbar. Your choice is remembered.
 | **2K** | 2560 × 1440 |
 | **4K** | 3840 × 2160 (default) |
 | **6K** | 5760 × 3240 |
-| **OLED** | board goes true `#000000` instead of near-black `#08080b`, so an OLED panel actually switches those pixels off — most of a Lite-Brite is unlit board, so it's most of the image |
+| **OLED** | board goes true `#000000` instead of near-black `#08080b`, so an OLED panel actually switches those pixels off — most of the board is unlit, so it's most of the image |
 
 Exports are **re-rendered** at the target size, not scaled up from the screen.
 The board is discs on a grid, so painting it again at a bigger peg pitch costs
@@ -146,7 +150,8 @@ is 81 × 19 pegs, centered on the board.
 ## Security
 
 Reviewed against the [Omarchy Plugin Marketplace][mp]'s pre-submission security
-scan on 19 August 2026, at commit `d55e9dc`.
+scan on 19 August 2026, at commit `d55e9dc`, and re-checked after the rename to
+Glow Studio, which moved names and paths without changing what the plugin does.
 
 **This is a self-review, not a marketplace audit.** Nobody from the marketplace
 has reviewed this repository. Omarchy plugins run unsandboxed as upstream code,

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "perfektnacht.lite-brite",
-  "name": "Lite-Brite",
+  "id": "perfektnacht.glow-studio",
+  "name": "Glow Studio",
   "version": "1.0.0",
   "author": "perfektnacht",
   "description": "A glowing peg board you can draw on, pre-lit with the OMARCHY logo",
@@ -12,12 +12,12 @@
   ],
   "keepLoaded": false,
   "entryPoints": {
-    "overlay": "LiteBrite.qml",
+    "overlay": "GlowStudio.qml",
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Lite-Brite",
-    "description": "Opens the Lite-Brite peg board",
+    "displayName": "Glow Studio",
+    "description": "Opens the Glow Studio peg board",
     "category": "Fun",
     "allowMultiple": false,
     "defaultSection": "right"

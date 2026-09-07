@@ -1,13 +1,13 @@
 #!/bin/bash
-# Toggle the Lite-Brite board. Bind this to a key, or call it from a script.
+# Toggle the Glow Studio board. Bind this to a key, or call it from a script.
 #
-#   omarchy-lite-brite          toggle
-#   omarchy-lite-brite show     open
-#   omarchy-lite-brite hide     close
+#   omarchy-glow-studio          toggle
+#   omarchy-glow-studio show     open
+#   omarchy-glow-studio hide     close
 
 set -euo pipefail
 
-PLUGIN_ID="perfektnacht.lite-brite"
+PLUGIN_ID="perfektnacht.glow-studio"
 
 case "${1:-toggle}" in
   show) omarchy-shell shell summon "$PLUGIN_ID" '{}' ;;

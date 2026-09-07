@@ -1,7 +1,7 @@
 import QtQuick
 import qs.Commons
 
-// Text button for the Lite-Brite toolbar. Uses the shared state tokens so it
+// Text button for the Glow Studio toolbar. Uses the shared state tokens so it
 // picks up hover/selected treatment from whatever theme is active.
 Item {
   id: root

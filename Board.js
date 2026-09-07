@@ -1,4 +1,4 @@
-// Board model for the Lite-Brite plugin.
+// Board model for the Glow Studio plugin.
 //
 // A board is a flat Uint8Array of `cols * rows` peg slots. 0 means the hole is
 // empty; 1..PALETTE.length is an index into PALETTE offset by one, so the
@@ -9,7 +9,7 @@
 
 // -------------------------------------------------------------- the palette
 //
-// The eight peg colors a 1967 Lite-Brite shipped with, tuned for a backlit
+// The eight peg colors the original 1967 toy shipped with, tuned for a backlit
 // look on near-black rather than for print. Order is the order they appear
 // in the toolbar and the order the number keys 1-8 select.
 var PALETTE = [

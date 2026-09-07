@@ -5,7 +5,7 @@ import QtQuick
 import qs.Commons
 import "Board.js" as Board
 
-// Lite-Brite — a fullscreen peg board you draw on with colored lights.
+// Glow Studio — a fullscreen peg board you draw on with colored lights.
 //
 // The board is a fixed 111x62 logical grid rather than one sized to the
 // monitor: a fixed grid means a saved board reopens identically on a
@@ -23,9 +23,14 @@ Item {
   property var manifest: null
   property bool opened: false
 
-  readonly property string pluginId: (manifest && manifest.id) || "perfektnacht.lite-brite"
+  readonly property string pluginId: (manifest && manifest.id) || "perfektnacht.glow-studio"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string statePath: home + "/.local/state/omarchy/lite-brite.json"
+  readonly property string statePath: home + "/.local/state/omarchy/glow-studio.json"
+
+  // Pre-rename location. Read once, only if the current file is absent, so a
+  // board drawn under the plugin's previous name survives the rename.
+  readonly property string legacyStatePath: home + "/.local/state/omarchy/lite-brite.json"
+  property string migrateFrom: ""
 
   // ------------------------------------------------------------ board model
 
@@ -94,7 +99,7 @@ Item {
   readonly property int glowCells: 3
 
   // OLED mode drops the board to true #000000 so the panel actually switches
-  // those pixels off — most of a Lite-Brite is unlit board, so it's most of
+  // those pixels off — most of the board is unlit, so it's most of
   // the image. The bevel ring survives, dimmed, or it stops reading as a peg
   // board at all. Applies to the screen as well as the export: the preview
   // should be what you get.
@@ -511,11 +516,28 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: root.restore(text())
-    // First run: no file yet. Without this the plugin would never mark itself
-    // restored, and flushSave() would refuse to create it. A failure *after*
-    // that is a transient read problem on reopen — keep the board that's
+    // First run: no file yet — but before falling back to the logo, look for a
+    // board saved under the plugin's previous name. A failure *after* we're
+    // restored is a transient read problem on reopen — keep the board that's
     // already in memory rather than resetting someone's drawing to the logo.
-    onLoadFailed: if (!root.restored) root.restore("")
+    onLoadFailed: if (!root.restored) root.migrateFrom = root.legacyStatePath
+  }
+
+  // Only ever touched when boardFile reported the current path missing, so it
+  // can't race the load above: its path stays empty until that happens, and an
+  // empty path reads nothing. The legacy file is left on disk rather than
+  // deleted — flushSave() writes the board to the new path from here on.
+  FileView {
+    id: legacyBoardFile
+    path: root.migrateFrom
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      if (root.restored) return
+      root.restore(text())
+      root.flushSave()
+    }
+    onLoadFailed: if (root.migrateFrom !== "" && !root.restored) root.restore("")
   }
 
   // ------------------------------------------------------------- export
@@ -526,7 +548,7 @@ Item {
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
   function exportPng() {
     if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
-    exportProc.outputPath = root.home + "/Pictures/lite-brite-"
+    exportProc.outputPath = root.home + "/Pictures/glow-studio-"
       + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
       + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
     exportProc.running = true
@@ -534,7 +556,7 @@ Item {
 
   function reportExport(ok, path) {
     var preset = root.exportPresets[root.exportPreset]
-    Quickshell.execDetached(["notify-send", "-a", "Lite-Brite",
+    Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
       ok ? "Board exported at " + preset.width + "×" + preset.height : "Export failed",
       ok ? path : "Could not write " + path])
   }
@@ -612,7 +634,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-lite-brite"
+    WlrLayershell.namespace: "omarchy-glow-studio"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
