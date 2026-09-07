@@ -10,7 +10,7 @@ over it, or clear it and start from nothing.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/perfektnacht/brite-plugin.git
+omarchy plugin add https://github.com/perfektnacht/glow-studio.git
 omarchy plugin enable perfektnacht.glow-studio right
 omarchy restart shell
 ```
