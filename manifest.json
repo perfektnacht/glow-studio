@@ -5,6 +5,7 @@
   "version": "1.0.0",
   "author": "perfektnacht",
   "description": "A glowing peg board you can draw on, pre-lit with the OMARCHY logo",
+  "license": "MIT",
   "kinds": [
     "overlay",
     "bar-widget"

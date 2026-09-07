@@ -5,7 +5,7 @@ A glowing peg board for [Omarchy](https://omarchy.org), in the spirit of the
 behind it. It opens pre-lit with the OMARCHY wordmark in green and you draw
 over it, or clear it and start from nothing.
 
-![the board](pluginpreview.png)
+![the board](preview.png)
 
 ## Install
 
@@ -166,8 +166,8 @@ check the claims rather than take them.
 Found something this missed? Report it privately through the marketplace's
 [security policy][sec], or open an issue here.
 
-[mp]: https://github.com/HANCORE-linux/omarchy-plugin-marketplace
-[sec]: https://github.com/HANCORE-linux/omarchy-plugin-marketplace/blob/main/SECURITY.md
+[mp]: https://github.com/omacom/omarchy-plugin-marketplace
+[sec]: https://github.com/omacom/omarchy-plugin-marketplace/blob/main/SECURITY.md
 
 ## License
 
