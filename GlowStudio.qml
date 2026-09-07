@@ -1,16 +1,17 @@
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
 import QtQuick
 import qs.Commons
 import "Board.js" as Board
 
-// Glow Studio — a fullscreen peg board you draw on with colored lights.
+// Glow Studio — a peg board you draw on with colored lights, in an ordinary
+// resizable window.
 //
 // The board is a fixed 111x62 logical grid rather than one sized to the
-// monitor: a fixed grid means a saved board reopens identically on a
-// different display, and it guarantees the OMARCHY wordmark always fits.
-// Cell size is whatever makes that grid fill the available space.
+// window: a fixed grid means a saved board reopens identically at a different
+// window size or on a different display, and it guarantees the OMARCHY
+// wordmark always fits. Cell size is whatever makes that grid fill the space
+// the window currently has.
 //
 // Everything is painted into one Canvas. ~6900 QML Rectangles would be
 // hopeless, and the board is static between edits, so a Canvas with
@@ -57,6 +58,11 @@ Item {
   // the ladder is 3.2 rather than something rounder-sounding.
   readonly property var brushRadii: [0, 1, 2, 3.2]
   readonly property real brushRadius: brushRadii[brushIndex]
+
+  // The footprints, built once. stamp() runs for every cell a Bresenham line
+  // visits, on every motion event, so recomputing the disc there was churning
+  // ~37 short-lived arrays per cell at the largest brush.
+  readonly property var brushFootprints: brushRadii.map(function(r) { return Board.brushOffsets(r) })
 
   property var undoStack: []
   property var redoStack: []
@@ -126,6 +132,7 @@ Item {
   // ---------------------------------------------------------- plugin API
 
   function open(payloadJson) {
+    panel.closingFromHost = false
     root.opened = true
     root.cursorCol = Math.floor(root.cols / 2)
     root.cursorRow = Math.floor(root.rows / 2)
@@ -138,6 +145,7 @@ Item {
 
   function close() {
     root.flushSave()
+    panel.closingFromHost = true
     root.opened = false
   }
 
@@ -146,6 +154,7 @@ Item {
     // Hide the window now so dismissal feels instant, but let the shell tear
     // the plugin down a beat later — destroying the item out from under an
     // in-flight atomic write would lose the last stroke.
+    panel.closingFromHost = true
     root.opened = false
     unloadTimer.restart()
   }
@@ -180,7 +189,7 @@ Item {
   readonly property int brushValue: root.eraser ? 0 : root.activeColor
 
   function stamp(col, row) {
-    var offsets = Board.brushOffsets(root.brushRadius)
+    var offsets = root.brushFootprints[root.brushIndex]
     var value = root.brushValue
     for (var i = 0; i < offsets.length; i++) {
       root.setCell(col + offsets[i][0], row + offsets[i][1], value)
@@ -373,13 +382,24 @@ Item {
     ctx.fillStyle = spec.backing
     ctx.fillRect(x0, y0, region.width, region.height)
 
-    // Repaint every cell whose glow can reach the region, not just the cells
-    // inside it, then let the clip discard the overdraw.
+    // Two cell ranges, because the passes need different reach.
+    //
+    // Holes are drawn at 0.30 * cell and never leave the cell they belong to,
+    // so the hole passes only need the cells the region actually covers.
+    var hc0 = Math.floor((x0 - originX) / cell)
+    var hr0 = Math.floor((y0 - originY) / cell)
+    var hc1 = Math.ceil((x1 - originX) / cell)
+    var hr1 = Math.ceil((y1 - originY) / cell)
+    //
+    // Lit pegs do reach past their own cell, so the peg pass has to consider
+    // every cell whose glow can land inside the region and let the clip
+    // discard the rest. Applying that margin to the holes too was drawing 169
+    // of them to show 49.
     var pad = spec.glowCells
-    var c0 = Math.floor((x0 - originX) / cell) - pad
-    var r0 = Math.floor((y0 - originY) / cell) - pad
-    var c1 = Math.ceil((x1 - originX) / cell) + pad
-    var r1 = Math.ceil((y1 - originY) / cell) + pad
+    var c0 = hc0 - pad
+    var r0 = hr0 - pad
+    var c1 = hc1 + pad
+    var r1 = hr1 + pad
 
     var tau = Math.PI * 2
     var holeR = cell * 0.30
@@ -389,8 +409,8 @@ Item {
     // every cell on a full repaint, so it has to be one fill, not 6900.
     ctx.fillStyle = spec.bevel
     ctx.beginPath()
-    for (var row = r0; row <= r1; row++) {
-      for (var col = c0; col <= c1; col++) {
+    for (var row = hr0; row <= hr1; row++) {
+      for (var col = hc0; col <= hc1; col++) {
         var hx = originX + col * cell + cell / 2
         var hy = originY + row * cell + cell / 2
         ctx.moveTo(hx + holeR, hy)
@@ -401,8 +421,8 @@ Item {
 
     ctx.fillStyle = spec.well
     ctx.beginPath()
-    for (row = r0; row <= r1; row++) {
-      for (col = c0; col <= c1; col++) {
+    for (row = hr0; row <= hr1; row++) {
+      for (col = hc0; col <= hc1; col++) {
         var wx = originX + col * cell + cell / 2 - holeR * 0.10
         var wy = originY + row * cell + cell / 2 - holeR * 0.10
         ctx.moveTo(wx + holeR * 0.86, wy)
@@ -628,20 +648,36 @@ Item {
 
   // ---------------------------------------------------------------- shell
 
-  PanelWindow {
+  // A normal toplevel, not a layer-shell surface. As a PanelWindow anchored to
+  // all four edges on the Overlay layer this was drawn above everything and
+  // was present on every workspace at once, because layer surfaces belong to
+  // the output rather than to a workspace — there was no way to put it behind
+  // anything, move it, or leave it running on one desktop while you used
+  // another. A FloatingWindow is tiled, floated, moved and closed by the
+  // window manager like any other application window.
+  FloatingWindow {
     id: panel
 
     visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    WlrLayershell.namespace: "omarchy-glow-studio"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
-    exclusionMode: ExclusionMode.Ignore
+    title: "Glow Studio"
+    color: Color.menu.background
 
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.scrim
+    // Enough to show the board at a usable peg pitch without covering the
+    // screen; the window manager is free to override both.
+    implicitWidth: 1280
+    implicitHeight: 860
+    // Below this the toolbar wraps to more rows than the board is tall.
+    minimumSize: Qt.size(560, 460)
+
+    // The window manager closes this one too — a titlebar button, a keybind,
+    // or `hyprctl dispatch killactive`. Route that back through the host so
+    // the shell drops the plugin instead of leaving it loaded and invisible.
+    property bool closingFromHost: false
+    onVisibleChanged: {
+      if (visible || panel.closingFromHost) return
+      root.flushSave()
+      root.opened = false
+      unloadTimer.restart()
     }
 
     // Only mounted while an export is running — at 6K the canvas image buffer
@@ -703,9 +739,16 @@ Item {
       }
     }
 
-    Column {
-      anchors.centerIn: parent
-      spacing: root.stackGap
+    // The toolbar spans the window and the board is centred above it, rather
+    // than the two being stacked at the board's width. That keeps the
+    // toolbar's height a function of the *window* width only: it wraps when
+    // the window is narrow, and because the board's cell size is derived from
+    // the height the toolbar leaves behind, letting the toolbar's width depend
+    // on the board would close that circle into a binding loop.
+    Item {
+      id: content
+      anchors.fill: parent
+      anchors.margins: root.outerMargin
 
       // ------------------------------------------------------- the board
 
@@ -713,6 +756,9 @@ Item {
         id: frame
         width: root.boardWidth + root.framePadding * 2
         height: root.boardHeight + root.framePadding * 2
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: Math.max(0, Math.round(
+          (parent.height - toolbar.height - root.stackGap - height) / 2))
         radius: Style.cornerRadius > 0 ? Style.cornerRadius + root.framePadding : 0
         color: "#0c0c11"
         border.width: Math.max(1, Style.space(1))
@@ -726,7 +772,14 @@ Item {
           width: root.boardWidth
           height: root.boardHeight
           renderTarget: Canvas.Image
-          renderStrategy: Canvas.Cooperative
+          // Threaded, matching the export canvas below rather than the
+          // default. Measured under quickshell this made no difference to
+          // either a full repaint or a sustained drag — the board's JS paint
+          // is only ~6ms and was never the bottleneck — so this is not a fix
+          // for anything, just the same choice the export makes, with no
+          // regression. If the drag stalls are ever chased properly, start by
+          // re-measuring whether this line matters at all.
+          renderStrategy: Canvas.Threaded
 
           opacity: root.restored ? 1 : 0
           Behavior on opacity { NumberAnimation { duration: 140 } }
@@ -824,7 +877,7 @@ Item {
 
       Rectangle {
         id: toolbar
-        width: frame.width
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: controls.implicitHeight + Style.spacing.panelPadding * 2
         radius: Style.cornerRadius
         color: Color.menu.background
@@ -837,8 +890,13 @@ Item {
           width: parent.width - Style.spacing.panelPadding * 2
           spacing: Style.spacing.md
 
-          Row {
-            anchors.horizontalCenter: parent.horizontalCenter
+          // Flow, not Row: in a resizable window the controls have to wrap
+          // rather than run off the edge. Flow positions its children, so
+          // nothing in here may anchor itself — each control is given the
+          // shared control height instead, which is what keeps a wrapped row
+          // aligned.
+          Flow {
+            width: parent.width
             spacing: Style.spacing.controlGap
 
             Repeater {
@@ -849,7 +907,7 @@ Item {
 
                 pegColor: modelData.hex
                 selected: !root.eraser && root.activeColor === index + 1
-                anchors.verticalCenter: parent.verticalCenter
+                height: Style.spacing.controlHeight
                 onClicked: {
                   root.activeColor = index + 1
                   root.eraser = false
@@ -861,13 +919,12 @@ Item {
               width: Math.max(1, Style.space(1))
               height: Style.spacing.controlHeight
               color: Util.alpha(Color.menu.text, 0.18)
-              anchors.verticalCenter: parent.verticalCenter
             }
 
             ToolButton {
               label: "Eraser"
               active: root.eraser
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.eraser = !root.eraser
             }
 
@@ -875,7 +932,6 @@ Item {
               width: Math.max(1, Style.space(1))
               height: Style.spacing.controlHeight
               color: Util.alpha(Color.menu.text, 0.18)
-              anchors.verticalCenter: parent.verticalCenter
             }
 
             Repeater {
@@ -884,7 +940,7 @@ Item {
                 required property int index
                 label: String(index + 1)
                 active: root.brushIndex === index
-                anchors.verticalCenter: parent.verticalCenter
+                height: Style.spacing.controlHeight
                 onClicked: root.brushIndex = index
               }
             }
@@ -893,32 +949,31 @@ Item {
               width: Math.max(1, Style.space(1))
               height: Style.spacing.controlHeight
               color: Util.alpha(Color.menu.text, 0.18)
-              anchors.verticalCenter: parent.verticalCenter
             }
 
             ToolButton {
               label: "Undo"
               enabled: root.undoStack.length > 0
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.undo()
             }
 
             ToolButton {
               label: "Redo"
               enabled: root.redoStack.length > 0
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.redo()
             }
 
             ToolButton {
               label: "Clear"
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.clearBoard()
             }
 
             ToolButton {
               label: "Logo"
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.restoreLogo()
             }
 
@@ -926,7 +981,6 @@ Item {
               width: Math.max(1, Style.space(1))
               height: Style.spacing.controlHeight
               color: Util.alpha(Color.menu.text, 0.18)
-              anchors.verticalCenter: parent.verticalCenter
             }
 
             Repeater {
@@ -937,7 +991,7 @@ Item {
 
                 label: modelData.label
                 active: root.exportPreset === index
-                anchors.verticalCenter: parent.verticalCenter
+                height: Style.spacing.controlHeight
                 onClicked: { root.exportPreset = index; root.scheduleSave() }
               }
             }
@@ -945,7 +999,7 @@ Item {
             ToolButton {
               label: "OLED"
               active: root.oled
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: { root.oled = !root.oled; root.scheduleSave() }
             }
 
@@ -957,13 +1011,13 @@ Item {
               label: exportLoader.active ? "Exporting…" : "Export PNG"
               active: exportLoader.active
               enabled: !exportLoader.active
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.exportPng()
             }
 
             ToolButton {
               label: "Close"
-              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.controlHeight
               onClicked: root.dismiss()
             }
           }
