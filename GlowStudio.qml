@@ -352,11 +352,6 @@ Item {
     }
   }
 
-  // The on-screen board: grid origin at the canvas corner, screen cell size.
-  function paintRegion(ctx, region) {
-    root.paintBoard(ctx, region, root.boardSpec(root.cell, 0, 0, false))
-  }
-
   // One painter for both the screen and every export resolution. `spec.cell` is
   // the peg pitch in pixels and `spec.originX/originY` is where cell (0,0)
   // starts, so an export can use a bigger pitch and inset the grid to center it.
@@ -764,34 +759,98 @@ Item {
         border.width: Math.max(1, Style.space(1))
         border.color: Util.alpha(Color.foreground, 0.18)
 
-        Canvas {
+        // The board is a grid of Canvas tiles, not one Canvas.
+        //
+        // Qt uploads a Canvas.Image canvas to the GPU as a single texture, and
+        // marking any part of it dirty re-uploads the whole thing. That upload
+        // happens in the scene graph's sync phase, on the GUI thread, so every
+        // repaint blocked input for as long as the upload took. Measured under
+        // quickshell with QSG_RENDER_TIMING on a 1665x930 board, a six-second
+        // drag spent 2635ms of its 2783ms of frame time in sync and managed 73
+        // frames; the same drag with these tiles spends 0ms in sync and gets
+        // 281 frames, with the worst single frame down from 109ms to 4ms.
+        //
+        // Tiling works because a stroke only ever dirties the few tiles it
+        // touches, so the bytes re-uploaded scale with the size of the edit
+        // rather than the size of the board. paintBoard already takes a grid
+        // origin, so a tile is just the same painter with its origin shifted;
+        // it draws any lit peg whose glow reaches into its region, which is
+        // what keeps glow continuous across a tile seam.
+        Item {
           id: board
 
           x: root.framePadding
           y: root.framePadding
           width: root.boardWidth
           height: root.boardHeight
-          renderTarget: Canvas.Image
-          // Threaded, matching the export canvas below rather than the
-          // default. Measured under quickshell this made no difference to
-          // either a full repaint or a sustained drag — the board's JS paint
-          // is only ~6ms and was never the bottleneck — so this is not a fix
-          // for anything, just the same choice the export makes, with no
-          // regression. If the drag stalls are ever chased properly, start by
-          // re-measuring whether this line matters at all.
-          renderStrategy: Canvas.Threaded
 
           opacity: root.restored ? 1 : 0
           Behavior on opacity { NumberAnimation { duration: 140 } }
 
-          onPaint: function(region) {
-            var target = (region && region.width > 0)
-              ? region : Qt.rect(0, 0, board.width, board.height)
-            root.paintRegion(board.getContext("2d"), target)
+          // Enough tiles that one stroke touches a small fraction of the
+          // board, few enough that a full repaint isn't 24 separate uploads
+          // of trivial size.
+          readonly property int tilesX: 6
+          readonly property int tilesY: 4
+
+          // The two calls the rest of the file makes, fanned out over tiles so
+          // callers keep talking to `board` as though it were still a Canvas.
+          function requestPaint() {
+            for (var i = 0; i < tiles.count; i++) {
+              var t = tiles.itemAt(i)
+              if (t) t.requestPaint()
+            }
           }
 
-          onWidthChanged: requestPaint()
-          onHeightChanged: requestPaint()
+          function markDirty(rect) {
+            for (var i = 0; i < tiles.count; i++) {
+              var t = tiles.itemAt(i)
+              if (!t) continue
+              var rx = rect.x - t.x
+              var ry = rect.y - t.y
+              if (rx + rect.width < 0 || ry + rect.height < 0
+                  || rx > t.width || ry > t.height) continue
+              t.markDirty(Qt.rect(rx, ry, rect.width, rect.height))
+            }
+          }
+
+          Repeater {
+            id: tiles
+            model: board.tilesX * board.tilesY
+
+            Canvas {
+              required property int index
+
+              readonly property int tx: index % board.tilesX
+              readonly property int ty: Math.floor(index / board.tilesX)
+              // Edges are computed from the neighbouring boundary rather than
+              // from a tile width, so rounding can never open a seam between
+              // two tiles or run the last one past the board.
+              readonly property int px: Math.round(tx * board.width / board.tilesX)
+              readonly property int py: Math.round(ty * board.height / board.tilesY)
+
+              x: px
+              y: py
+              width: Math.round((tx + 1) * board.width / board.tilesX) - px
+              height: Math.round((ty + 1) * board.height / board.tilesY) - py
+
+              renderTarget: Canvas.Image
+              renderStrategy: Canvas.Threaded
+
+              // Same painter as the export, with the grid origin pulled back
+              // by this tile's position so cell (0,0) still lands at the
+              // board's corner.
+              onPaint: function(region) {
+                var target = (region && region.width > 0)
+                  ? region : Qt.rect(0, 0, width, height)
+                root.paintBoard(getContext("2d"), target,
+                                root.boardSpec(root.cell, -px, -py, false))
+              }
+
+              onWidthChanged: requestPaint()
+              onHeightChanged: requestPaint()
+            }
+          }
 
           MouseArea {
             id: drawArea
