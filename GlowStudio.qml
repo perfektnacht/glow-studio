@@ -129,6 +129,11 @@ Item {
     { label: "6K", width: 5760, height: 3240 }
   ]
 
+  // Device pixels per logical pixel, as grabToImage actually applies it.
+  // Measured by grabProbe below rather than read from a property; 0 until
+  // that lands, which the export treats as 1.
+  property real grabScale: 0
+
   // ---------------------------------------------------------- plugin API
 
   function open(payloadJson) {
@@ -627,10 +632,19 @@ Item {
         if (grabbed) return
         grabbed = true
         var path = exportProc.outputPath
+        // The target size is in logical pixels, because grabToImage
+        // multiplies it by the display scale on the way out — the same
+        // multiplication that made an unqualified grab of this canvas come
+        // back at 4800x2700. Dividing first lands the file on the preset
+        // exactly. The canvas itself stays at full preset size, so those
+        // extra pixels the scaled render already paid for come back as
+        // supersampling rather than going to waste.
+        var scale = root.grabScale > 0 ? root.grabScale : 1
         var started = grabToImage(function(result) {
           root.reportExport(result.saveToFile(path), path)
           exportLoader.active = false
-        })
+        }, Qt.size(Math.round(preset.width / scale),
+                   Math.round(preset.height / scale)))
         if (!started) {
           root.reportExport(false, path)
           exportLoader.active = false
@@ -676,12 +690,76 @@ Item {
     }
 
     // Only mounted while an export is running — at 6K the canvas image buffer
-    // alone is ~75MB, which is not something to keep around for a toy. It's
-    // invisible, so a 6K canvas never flashes on screen.
+    // alone is ~75MB before the display scale, and more after it, which is not
+    // something to keep around for a toy. It's invisible, so a 6K canvas never
+    // flashes on screen.
     Loader {
       id: exportLoader
       active: false
       sourceComponent: exportCanvasComponent
+    }
+
+    // grabToImage renders an item at its size in *device* pixels, so an export
+    // came back multiplied by the display scale: the 4K preset wrote 4800x2700
+    // on a 1.25x monitor, contradicting the README, the preset labels and the
+    // whole point of re-rendering at a fixed target size.
+    //
+    // The scale has to be measured rather than read. The ratios QML exposes
+    // are the rounded integer one — Screen.devicePixelRatio and the Quickshell
+    // screen both report 2 on a 1.25x output — while grabs use the fractional
+    // scale the compositor actually set, and nothing exposes that number. So
+    // grab a small probe of a known logical size and divide. It costs one
+    // 64x64 grab per window, and the window has to be open to export anyway.
+    //
+    // Measured once, when the window opens. Dragging the window to a display
+    // with a different scale and exporting without reopening would fall back
+    // to the stale ratio.
+    Item {
+      id: grabProbe
+
+      readonly property int side: 64
+
+      // Holds the grab result alive until the Image has read its size.
+      property var held: null
+
+      Canvas {
+        visible: false
+        width: grabProbe.side
+        height: grabProbe.side
+        renderTarget: Canvas.Image
+
+        property bool grabbed: false
+
+        onPaint: {
+          var ctx = getContext("2d")
+          ctx.fillStyle = "#ffffff"
+          ctx.fillRect(0, 0, width, height)
+        }
+
+        // A grab only succeeds once the item has really rendered, which is why
+        // this hangs off onPainted instead of Component.onCompleted.
+        onPainted: {
+          if (grabbed) return
+          grabbed = true
+          grabToImage(function(result) {
+            grabProbe.held = result
+            grabProbeImage.source = result.url
+          })
+        }
+
+        Component.onCompleted: requestPaint()
+      }
+
+      Image {
+        id: grabProbeImage
+        visible: false
+        cache: false
+        onStatusChanged: {
+          if (status !== Image.Ready) return
+          root.grabScale = implicitWidth / grabProbe.side
+          grabProbe.held = null
+        }
+      }
     }
 
     Item {
