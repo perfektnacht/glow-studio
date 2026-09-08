@@ -784,8 +784,24 @@ Item {
           width: root.boardWidth
           height: root.boardHeight
 
-          opacity: root.restored ? 1 : 0
+          // Each tile paints on its own render thread and finishes on its own
+          // schedule, so revealing the board the moment the state file decodes
+          // shows it arriving a piece at a time. Wait until every tile has
+          // painted the restored cells, then fade the whole board in as one.
+          property int tilesPainted: 0
+          property bool revealOverdue: false
+          opacity: root.restored && (tilesPainted >= tilesX * tilesY || revealOverdue)
+                   ? 1 : 0
           Behavior on opacity { NumberAnimation { duration: 140 } }
+
+          // A tile that never reports a paint must not leave the board
+          // invisible, so the reveal has a deadline as well as a condition.
+          Timer {
+            interval: 600
+            running: root.restored && !board.revealOverdue
+                     && board.tilesPainted < board.tilesX * board.tilesY
+            onTriggered: board.revealOverdue = true
+          }
 
           // Enough tiles that one stroke touches a small fraction of the
           // board, few enough that a full repaint isn't 24 separate uploads
@@ -836,6 +852,17 @@ Item {
 
               renderTarget: Canvas.Image
               renderStrategy: Canvas.Threaded
+
+              // Counted once per tile, and only once the cells are restored,
+              // so the empty board painted at startup can't tick the reveal
+              // forward before there is anything to show.
+              property bool everPainted: false
+              onPainted: {
+                if (root.restored && !everPainted) {
+                  everPainted = true
+                  board.tilesPainted++
+                }
+              }
 
               // Same painter as the export, with the grid origin pulled back
               // by this tile's position so cell (0,0) still lands at the
