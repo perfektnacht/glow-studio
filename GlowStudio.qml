@@ -1054,135 +1054,131 @@ Item {
           width: parent.width - Style.spacing.panelPadding * 2
           spacing: Style.spacing.md
 
-          // Flow, not Row: in a resizable window the controls have to wrap
-          // rather than run off the edge. Flow positions its children, so
-          // nothing in here may anchor itself — each control is given the
-          // shared control height instead, which is what keeps a wrapped row
-          // aligned.
+          // A Flow of labelled sections, not one flat Flow of controls: the
+          // captions say what each cluster does, and because a section is a
+          // single Flow child it wraps to the next line as a unit when the
+          // window narrows, rather than spilling lone buttons across the
+          // break. Flow positions its children, so nothing in here may
+          // anchor itself — each control is given the shared control height
+          // instead, which is what keeps a wrapped row aligned.
           Flow {
             width: parent.width
-            spacing: Style.spacing.controlGap
+            spacing: Style.spacing.xl
 
-            Repeater {
-              model: Board.PALETTE
-              Swatch {
-                required property var modelData
-                required property int index
+            ToolbarSection {
+              label: "Color"
 
-                pegColor: modelData.hex
-                selected: !root.eraser && root.activeColor === index + 1
+              Repeater {
+                model: Board.PALETTE
+                Swatch {
+                  required property var modelData
+                  required property int index
+
+                  pegColor: modelData.hex
+                  selected: !root.eraser && root.activeColor === index + 1
+                  height: Style.spacing.controlHeight
+                  onClicked: {
+                    root.activeColor = index + 1
+                    root.eraser = false
+                  }
+                }
+              }
+
+              ToolButton {
+                label: "Eraser"
+                active: root.eraser
                 height: Style.spacing.controlHeight
-                onClicked: {
-                  root.activeColor = index + 1
-                  root.eraser = false
+                onClicked: root.eraser = !root.eraser
+              }
+            }
+
+            ToolbarSection {
+              label: "Brush"
+
+              Repeater {
+                model: root.brushRadii.length
+                ToolButton {
+                  required property int index
+                  label: String(index + 1)
+                  active: root.brushIndex === index
+                  height: Style.spacing.controlHeight
+                  onClicked: root.brushIndex = index
                 }
               }
             }
 
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
+            ToolbarSection {
+              label: "Edit"
 
-            ToolButton {
-              label: "Eraser"
-              active: root.eraser
-              height: Style.spacing.controlHeight
-              onClicked: root.eraser = !root.eraser
-            }
-
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
-
-            Repeater {
-              model: root.brushRadii.length
               ToolButton {
-                required property int index
-                label: String(index + 1)
-                active: root.brushIndex === index
+                label: "Undo"
+                enabled: root.undoStack.length > 0
                 height: Style.spacing.controlHeight
-                onClicked: root.brushIndex = index
+                onClicked: root.undo()
+              }
+
+              ToolButton {
+                label: "Redo"
+                enabled: root.redoStack.length > 0
+                height: Style.spacing.controlHeight
+                onClicked: root.redo()
+              }
+
+              ToolButton {
+                label: "Clear"
+                height: Style.spacing.controlHeight
+                onClicked: root.clearBoard()
+              }
+
+              ToolButton {
+                label: "Logo"
+                height: Style.spacing.controlHeight
+                onClicked: root.restoreLogo()
               }
             }
 
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
+            ToolbarSection {
+              label: "Wallpaper"
 
-            ToolButton {
-              label: "Undo"
-              enabled: root.undoStack.length > 0
-              height: Style.spacing.controlHeight
-              onClicked: root.undo()
-            }
+              Repeater {
+                model: root.exportPresets
+                ToolButton {
+                  required property var modelData
+                  required property int index
 
-            ToolButton {
-              label: "Redo"
-              enabled: root.redoStack.length > 0
-              height: Style.spacing.controlHeight
-              onClicked: root.redo()
-            }
+                  label: modelData.label
+                  active: root.exportPreset === index
+                  height: Style.spacing.controlHeight
+                  onClicked: { root.exportPreset = index; root.scheduleSave() }
+                }
+              }
 
-            ToolButton {
-              label: "Clear"
-              height: Style.spacing.controlHeight
-              onClicked: root.clearBoard()
-            }
-
-            ToolButton {
-              label: "Logo"
-              height: Style.spacing.controlHeight
-              onClicked: root.restoreLogo()
-            }
-
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
-
-            Repeater {
-              model: root.exportPresets
               ToolButton {
-                required property var modelData
-                required property int index
-
-                label: modelData.label
-                active: root.exportPreset === index
+                label: "OLED"
+                active: root.oled
                 height: Style.spacing.controlHeight
-                onClicked: { root.exportPreset = index; root.scheduleSave() }
+                onClicked: { root.oled = !root.oled; root.scheduleSave() }
+              }
+
+              ToolButton {
+                // The grab readback and PNG encode are unavoidably synchronous
+                // — no QML API moves them off the GUI thread — so the last
+                // ~600ms of a 6K export is a real hitch. The label at least
+                // says what's happening before it lands.
+                label: exportLoader.active ? "Exporting…" : "Export PNG"
+                active: exportLoader.active
+                enabled: !exportLoader.active
+                height: Style.spacing.controlHeight
+                onClicked: root.exportPng()
               }
             }
 
-            ToolButton {
-              label: "OLED"
-              active: root.oled
-              height: Style.spacing.controlHeight
-              onClicked: { root.oled = !root.oled; root.scheduleSave() }
-            }
-
-            ToolButton {
-              // The grab readback and PNG encode are unavoidably synchronous
-              // — no QML API moves them off the GUI thread — so the last
-              // ~600ms of a 6K export is a real hitch. The label at least
-              // says what's happening before it lands.
-              label: exportLoader.active ? "Exporting…" : "Export PNG"
-              active: exportLoader.active
-              enabled: !exportLoader.active
-              height: Style.spacing.controlHeight
-              onClicked: root.exportPng()
-            }
-
-            ToolButton {
-              label: "Close"
-              height: Style.spacing.controlHeight
-              onClicked: root.dismiss()
+            ToolbarSection {
+              ToolButton {
+                label: "Close"
+                height: Style.spacing.controlHeight
+                onClicked: root.dismiss()
+              }
             }
           }
 
