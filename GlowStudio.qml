@@ -1190,9 +1190,13 @@ Item {
                 }
               }
 
-              ToolButton {
-                label: "Eraser"
-                active: root.eraser
+              // The eraser, drawn as the peg it places: laying down an
+              // unlit hole is effectively laying down a black peg, so it
+              // sits at the end of the palette as what it is, rather than
+              // apart from the colors as a text button.
+              Swatch {
+                pegColor: "#000000"
+                selected: root.eraser
                 height: Style.spacing.controlHeight
                 onClicked: root.eraser = !root.eraser
               }
