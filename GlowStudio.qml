@@ -64,6 +64,18 @@ Item {
   // ~37 short-lived arrays per cell at the largest brush.
   readonly property var brushFootprints: brushRadii.map(function(r) { return Board.brushOffsets(r) })
 
+  // Lock Brush mode: while it's on, the brush behaves as if the button
+  // were held down — moving the pointer over the board paints, with no
+  // click. Locked rather than hovered: nothing hovers on a laptop trackpad,
+  // but a locked brush reads the way tap-lock does. The wheel keeps its own
+  // job and still resizes the brush.
+  property bool brushLocked: false
+
+  // True from the first motion of a locked sweep until the pointer leaves
+  // the board or rests, so a whole sweep lands in the journal as one
+  // stroke — the same single-undo guarantee a drag has.
+  property bool lockStrokeOpen: false
+
   property var undoStack: []
   property var redoStack: []
 
@@ -217,7 +229,44 @@ Item {
     root.endStroke()
   }
 
+  // One pointer motion with the brush locked and no button held: the same
+  // stamp a drag would make, at the pointer. Consecutive motions go
+  // through extendStroke, so a sweep draws a continuous line rather than a
+  // dotted one.
+  function lockStamp() {
+    if (root.lockStrokeOpen) {
+      root.extendStroke(root.cursorCol, root.cursorRow)
+    } else {
+      // Flag after beginStroke, not before: beginStroke closes any open
+      // locked stroke on the way in, and it must not close this one.
+      root.beginStroke(root.cursorCol, root.cursorRow, false)
+      root.lockStrokeOpen = true
+    }
+    lockStrokeEnd.restart()
+  }
+
+  // Ends the locked sweep when the pointer rests. 300ms is short enough
+  // that the stroke finishes as soon as the motion does, and long enough
+  // that a deliberate slow trace still lands as one action. Leaving the
+  // board ends the stroke immediately, without waiting out the timer.
+  function endLockStroke() {
+    if (!root.lockStrokeOpen) return
+    root.lockStrokeOpen = false
+    lockStrokeEnd.stop()
+    root.endStroke()
+  }
+
+  Timer {
+    id: lockStrokeEnd
+    interval: 300
+    onTriggered: root.endLockStroke()
+  }
+
   function beginStroke(col, row, connect) {
+    // A click or Enter mid-sweep takes the board over: close the open
+    // locked stroke as its own undo action first, or its journal is dropped
+    // when the next line resets it.
+    root.endLockStroke()
     root.strokeJournal = []
     if (connect && root.lastCol >= 0) root.extendStroke(col, row)
     else root.stamp(col, row)
@@ -801,6 +850,8 @@ Item {
           root.brushIndex = Math.max(0, root.brushIndex - 1)
         } else if (event.key === Qt.Key_BracketRight) {
           root.brushIndex = Math.min(root.brushRadii.length - 1, root.brushIndex + 1)
+        } else if (event.key === Qt.Key_K) {
+          root.brushLocked = !root.brushLocked
         } else if (event.key === Qt.Key_C) {
           root.clearBoard()
         } else if (event.key === Qt.Key_L) {
@@ -990,9 +1041,14 @@ Item {
               var previousCol = root.cursorCol
               var previousRow = root.cursorRow
               track(mouse)
-              if (!pressed) return
-              if (root.cursorCol === previousCol && root.cursorRow === previousRow) return
-              root.extendStroke(root.cursorCol, root.cursorRow)
+              if (pressed) {
+                if (root.cursorCol === previousCol && root.cursorRow === previousRow) return
+                root.extendStroke(root.cursorCol, root.cursorRow)
+              } else if (root.brushLocked) {
+                // A locked brush paints unpressed motion the way a drag
+                // paints pressed motion.
+                root.lockStamp()
+              }
             }
 
             onReleased: function(mouse) {
@@ -1008,6 +1064,9 @@ Item {
                 ? Math.min(root.brushRadii.length - 1, root.brushIndex + 1)
                 : Math.max(0, root.brushIndex - 1)
             }
+
+            // Leaving the board ends a locked sweep where it stands.
+            onExited: root.endLockStroke()
 
             // Brush footprint at the cursor. A QML item rather than canvas
             // ink, so moving the cursor never repaints the board.
@@ -1105,6 +1164,13 @@ Item {
                   onClicked: root.brushIndex = index
                 }
               }
+
+              ToolButton {
+                label: "Lock Brush"
+                active: root.brushLocked
+                height: Style.spacing.controlHeight
+                onClicked: root.brushLocked = !root.brushLocked
+              }
             }
 
             ToolbarSection {
@@ -1185,8 +1251,9 @@ Item {
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "drag, or ←↑↓→ then Enter · shift+click / shift+Enter line · "
-                + "right-drag erase · 1-8 color · E eraser · "
-                + "[ ] or scroll brush size · Ctrl+Z undo · C clear · L logo · "
+                + "right-drag erase · 1-8 color · E eraser · [ ] brush size · "
+                + "K lock brush — the pointer paints as it moves, no click · "
+                + "Ctrl+Z undo · C clear · L logo · "
                 + "2K/4K/6K wallpaper size, OLED = true black · Ctrl+S export · Esc close"
             color: Util.alpha(Color.menu.text, 0.55)
             font.family: Style.font.menuFamily
