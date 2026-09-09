@@ -26,7 +26,15 @@ Item {
 
   readonly property string pluginId: (manifest && manifest.id) || "perfektnacht.glow-studio"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string statePath: home + "/.local/state/omarchy/glow-studio.json"
+  readonly property string stateDir: home + "/.local/state/omarchy"
+  readonly property string statePath: stateDir + "/glow-studio.json"
+
+  // Where the wallpaper render lives. One fixed path rather than a fresh
+  // timestamped file per apply: `omarchy theme bg set` records a symlink to
+  // the file it is handed, so it has to stay put to still be the background
+  // tomorrow, and overwriting it in place keeps old renders from piling up
+  // in the state directory.
+  readonly property string wallpaperPath: stateDir + "/glow-studio-wallpaper.png"
 
   // Pre-rename location. Read once, only if the current file is absent, so a
   // board drawn under the plugin's previous name survives the rename.
@@ -615,11 +623,16 @@ Item {
   // from the screen: the board is vector-ish (discs on a grid), so painting it
   // again at a bigger peg pitch costs one repaint and gives clean edges, where
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
-  function exportPng() {
+  function exportPng(forWallpaper) {
     if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
-    exportProc.outputPath = root.home + "/Pictures/glow-studio-"
-      + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
-      + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
+    exportProc.wallpaper = forWallpaper
+    exportProc.outputPath = forWallpaper
+      ? root.wallpaperPath
+      : root.home + "/Pictures/glow-studio-"
+        + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
+        + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
+    exportProc.command = ["mkdir", "-p",
+      forWallpaper ? root.stateDir : root.home + "/Pictures"]
     exportProc.running = true
   }
 
@@ -630,11 +643,42 @@ Item {
       ok ? path : "Could not write " + path])
   }
 
+  // Hand a finished wallpaper render to Omarchy's own background command
+  // rather than reaching into Hyprland or the theme system from here:
+  // `omarchy theme bg set` does both halves — points the shell's background
+  // symlink at the file, and updates the running desktop — so the wallpaper
+  // sticks across reboots and keeps working with the background switcher
+  // afterwards.
+  function applyWallpaper(ok, path) {
+    if (!ok) {
+      Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
+        "Wallpaper not set", "Could not write " + path])
+      return
+    }
+    wallpaperProc.imagePath = path
+    wallpaperProc.command = ["omarchy", "theme", "bg", "set", path]
+    wallpaperProc.running = true
+  }
+
   Process {
     id: exportProc
     property string outputPath: ""
+    property bool wallpaper: false
     command: ["mkdir", "-p", root.home + "/Pictures"]
     onExited: exportLoader.active = true
+  }
+
+  Process {
+    id: wallpaperProc
+    // The path currently being applied, so the completion notification can
+    // say what landed where.
+    property string imagePath: ""
+    command: ["omarchy", "theme", "bg", "set", ""]
+    onExited: function(exitCode) {
+      Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
+        exitCode === 0 ? "Wallpaper set" : "Wallpaper not set",
+        exitCode === 0 ? imagePath : "omarchy theme bg set exited with " + exitCode])
+    }
   }
 
   // The component the export Loader instantiates. The Loader itself lives
@@ -690,12 +734,15 @@ Item {
         // supersampling rather than going to waste.
         var scale = root.grabScale > 0 ? root.grabScale : 1
         var started = grabToImage(function(result) {
-          root.reportExport(result.saveToFile(path), path)
+          var ok = result.saveToFile(path)
+          if (exportProc.wallpaper) root.applyWallpaper(ok, path)
+          else root.reportExport(ok, path)
           exportLoader.active = false
         }, Qt.size(Math.round(preset.width / scale),
                    Math.round(preset.height / scale)))
         if (!started) {
-          root.reportExport(false, path)
+          if (exportProc.wallpaper) root.applyWallpaper(false, path)
+          else root.reportExport(false, path)
           exportLoader.active = false
         }
       }
@@ -840,7 +887,7 @@ Item {
         } else if (ctrl && (event.key === Qt.Key_Y)) {
           root.redo()
         } else if (ctrl && event.key === Qt.Key_S) {
-          root.exportPng()
+          root.exportPng(false)
         } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_8) {
           root.activeColor = event.key - Qt.Key_1 + 1
           root.eraser = false
@@ -1227,15 +1274,26 @@ Item {
               }
 
               ToolButton {
+                // Same render pipeline as Export PNG, so the button rides
+                // the same unavoidably synchronous grab; the label says what
+                // is happening before it lands.
+                label: exportLoader.active && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
+                active: exportLoader.active && exportProc.wallpaper
+                enabled: !exportLoader.active
+                height: Style.spacing.controlHeight
+                onClicked: root.exportPng(true)
+              }
+
+              ToolButton {
                 // The grab readback and PNG encode are unavoidably synchronous
                 // — no QML API moves them off the GUI thread — so the last
                 // ~600ms of a 6K export is a real hitch. The label at least
                 // says what's happening before it lands.
-                label: exportLoader.active ? "Exporting…" : "Export PNG"
-                active: exportLoader.active
+                label: exportLoader.active && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
+                active: exportLoader.active && !exportProc.wallpaper
                 enabled: !exportLoader.active
                 height: Style.spacing.controlHeight
-                onClicked: root.exportPng()
+                onClicked: root.exportPng(false)
               }
             }
 
