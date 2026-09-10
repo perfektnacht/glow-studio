@@ -1349,8 +1349,8 @@ Item {
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "drag, or ←↑↓→ then Enter · shift+click / shift+Enter line · "
-                + "right-drag erase · 1-8 color · E eraser · [ ] brush size · "
-                + "K lock brush — the pointer paints as it moves, no click · "
+                + "right-drag erase · 1-8 color · E eraser · "
+                + "[ ] or scroll brush size · K lock brush · "
                 + "Ctrl+Z undo · C clear · L logo · "
                 + "2K/4K/6K wallpaper size, OLED = true black · Ctrl+S export · Esc close"
             color: Util.alpha(Color.menu.text, 0.55)
