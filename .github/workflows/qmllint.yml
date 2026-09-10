@@ -8,7 +8,18 @@ on:
 jobs:
   qmllint:
     runs-on: ubuntu-latest
+    # Arch, not ubuntu-latest's own image: Omarchy is Arch, and Ubuntu ships
+    # Qt 6.4's qmllint, which predates the warning categories .qmllint.ini
+    # names — it ignores the settings file and fails on analysis noise. This
+    # runs the same qmllint a contributor has on their desktop.
+    container: archlinux:latest
+
     steps:
+      # Before checkout, so actions/checkout can clone rather than fall back
+      # to a tarball.
+      - name: Install Qt 6 qmllint
+        run: pacman -Sy --noconfirm --needed qt6-declarative git
+
       - uses: actions/checkout@v4
 
       # The plugin imports qs.Commons from the shell it runs inside, so the
@@ -22,11 +33,6 @@ jobs:
           path: omarchy
           clean: false
 
-      - name: Install Qt 6 qmllint
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qt6-declarative-dev-tools
-
       - name: Lint
         run: |
           # Quickshell exposes the shell root as the module `qs`, so
@@ -35,4 +41,5 @@ jobs:
           # what makes this reproducible with the same command locally.
           mkdir -p imports
           ln -sfn "$PWD/omarchy/shell" imports/qs
+          /usr/lib/qt6/bin/qmllint --version
           /usr/lib/qt6/bin/qmllint -I imports *.qml
