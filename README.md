@@ -79,19 +79,52 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
-| `K` | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer; Undo, Clear and Logo close the sweep first, so it stays one action. The lock stays on until `K` or the **Lock Brush** button turns it off, including while the pointer is off the board — so a hand that wanders off the pegboard and back keeps painting. The cost is that crossing the board to reach a toolbar control paints on the way; Undo takes it back |
+| `K`, **Lock Brush** | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer or leaving the board; Undo, Clear and Logo close the sweep first, so it stays one action. See [Lock Brush](#lock-brush) |
 | `1`–`8` | pick a peg color |
-| `E` | eraser |
+| `E`, `0` | eraser — or the black swatch at the end of the palette |
 | `[` `]` | brush size |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | undo / redo (60 strokes deep) |
 | `C` | clear the board |
 | `L` | put the OMARCHY logo back |
 | `Ctrl+S` | export a PNG to `~/Pictures` |
-| `Esc` | close |
+| `Ctrl+W` | set the desktop wallpaper |
+| `Shift + ?` | open the keyboard reference over the board; the same keys, `Esc`, or a click close it |
+| `Esc` | close — the reference panel first, if it's open, then the plugin |
 
 The board autosaves to `~/.local/state/omarchy/glow-studio.json` a moment after
 every stroke, so it comes back exactly as you left it. Delete that file to
 start over from the logo.
+
+## The toolbar
+
+The palette sits on its own centred row: eight peg colors and, at the end of
+them, a black swatch for the eraser. The eraser is a ninth value rather than a
+mode, so picking it is the same gesture as picking a color.
+
+Underneath, the controls are grouped into captioned sections — **Brush**,
+**Edit**, **Output** — which centre while they fit and wrap onto their own rows
+once the window is too narrow to hold them side by side. Nothing is dropped at
+laptop or tiled width.
+
+The line under the buttons is the status line: `Shift + ?  for keyboard
+shortcuts` normally, `brush locked — Lock Brush or K to release` while the lock
+is on. It reads there rather than on the board, because the board is the
+drawing surface. It replaced a single line carrying every binding, which could
+only ever hold as many of them as the window was wide; the reference panel
+wraps nothing and drops nothing.
+
+### Lock Brush
+
+`Lock Brush`, or `K`, makes the brush paint on motion alone: move the pointer
+over the board and it lays pegs down with nothing held. It's there for
+trackpads, where holding a click through a long drag is tiring, and for anyone
+who hasn't got the click gesture yet.
+
+The lock stays on until the button or `K` turns it off. Leaving the board does
+not release it, so a hand that wanders off the pegboard and back keeps
+painting. The cost is that crossing the board to reach a toolbar control paints
+on the way; `Undo` takes it back, and a mode that switched itself off mid-stroke
+would be the worse of the two.
 
 ## Wallpapers
 
@@ -101,11 +134,15 @@ at whichever size is selected in the toolbar. Your choice is remembered.
 `Set Wallpaper` renders the board the same way, at the same selected size, and
 hands the file to `omarchy theme bg set` — Omarchy's own background command —
 so the desktop changes immediately and the choice survives a reboot. The
-render lands in `~/.local/state/omarchy/` under a fresh timestamped name each
-time, because the background system records a symlink to the file it is given
-and ignores a path it is already showing: overwriting one fixed file in place
-would leave the desktop on the previous render. Each successful apply deletes
-the renders before it, so one file is kept — the one the symlink points at.
+render lands in `~/.local/state/omarchy/` under a fresh name each time — a
+timestamp plus a counter, since a 2K render can finish inside the same second —
+because the background system records a symlink to the file it is given and
+ignores a path it is already showing: overwriting one fixed file in place would
+leave the desktop on the previous render. Each successful apply deletes the
+renders before it, so one file is kept — the one the symlink points at.
+
+`Ctrl+W` does the same thing from the keyboard, the way `Ctrl+S` does for the
+export.
 
 | | |
 |---|---|
@@ -131,12 +168,18 @@ The grid is a fixed **111 × 62** regardless of monitor — a saved board reopen
 identically on a different display, and the wordmark is guaranteed to fit. Cell
 size is whatever makes that grid fill the screen.
 
-All 6,882 holes are painted into a single `Canvas`. Thousands of QML
-`Rectangle`s would be hopeless, and the board is static between edits, so the
-canvas repaints only the rectangle a stroke touched (plus a margin for the
-glow that bleeds out of it). Measured on this machine: a full repaint is
-**~7ms**, a stroke's incremental repaint is **~1ms**, and an untouched board
-paints **zero** frames — no idle GPU cost while it sits open.
+All 6,882 holes are painted into `Canvas` tiles — a **6 × 4** grid of them
+rather than one canvas the size of the board. Thousands of QML `Rectangle`s
+would be hopeless, and the board is static between edits, so a stroke repaints
+only the tiles it touched: usually one, a twenty-fourth of the board, instead
+of the whole thing.
+
+A touched tile repaints **whole**. `Canvas.markDirty` does not reliably repaint
+the sub-rectangle it is handed — a single stamp could leave a block of flat
+backing with no hole texture sitting over the pegboard until something forced a
+full repaint — and the tiling is where the saving came from in the first place,
+not from sub-tile rectangles. An untouched board paints **zero** frames, so
+there's no idle GPU cost while it sits open.
 
 The glow is stacked translucent discs rather than a per-peg radial gradient,
 which lets every peg of a given color batch into one fill. Overlapping halos
