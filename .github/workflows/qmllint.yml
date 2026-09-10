@@ -1,0 +1,38 @@
+name: qmllint
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  qmllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The plugin imports qs.Commons from the shell it runs inside, so the
+      # lint is only meaningful against a real Omarchy checkout. Tracking the
+      # default branch rather than a tag is deliberate: this plugin declares
+      # Omarchy 4 or newer, and a break upstream is worth hearing about here
+      # before someone hits it on their desktop.
+      - uses: actions/checkout@v4
+        with:
+          repository: basecamp/omarchy
+          path: omarchy
+          clean: false
+
+      - name: Install Qt 6 qmllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-declarative-dev-tools
+
+      - name: Lint
+        run: |
+          # Quickshell exposes the shell root as the module `qs`, so
+          # `import qs.Commons` resolves only when an import path contains a
+          # directory of that name. Settings come from .qmllint.ini, which is
+          # what makes this reproducible with the same command locally.
+          mkdir -p imports
+          ln -sfn "$PWD/omarchy/shell" imports/qs
+          /usr/lib/qt6/bin/qmllint -I imports *.qml
