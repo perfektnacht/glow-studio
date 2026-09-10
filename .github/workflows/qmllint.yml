@@ -17,8 +17,8 @@ jobs:
     steps:
       # Before checkout, so actions/checkout can clone rather than fall back
       # to a tarball.
-      - name: Install Qt 6 qmllint
-        run: pacman -Sy --noconfirm --needed qt6-declarative git
+      - name: Install qmllint and the Quickshell types the plugin builds on
+        run: pacman -Sy --noconfirm --needed qt6-declarative quickshell git
 
       - uses: actions/checkout@v4
 
@@ -42,4 +42,7 @@ jobs:
           mkdir -p imports
           ln -sfn "$PWD/omarchy/shell" imports/qs
           /usr/lib/qt6/bin/qmllint --version
-          /usr/lib/qt6/bin/qmllint -I imports *.qml
+          # -W 0 is what makes this a gate. qmllint defaults to
+          # --max-warnings -1, where warnings print and the exit code stays 0
+          # — a broken import would scroll past under a green check.
+          /usr/lib/qt6/bin/qmllint -W 0 -I imports *.qml
