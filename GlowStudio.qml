@@ -1083,6 +1083,20 @@ Item {
             }
           }
 
+          // Repaint whole tiles, not sub-rectangles of them.
+          //
+          // Canvas.markDirty on a sub-rect does not reliably repaint what it
+          // was handed: a single stamp could leave a large block filled with
+          // backing and no hole texture, with only a smaller square around
+          // the stroke drawn correctly — a light grey box sitting over the
+          // pegboard until something forced a full repaint. Handing the tile
+          // requestPaint() instead makes every paint cover the whole tile, so
+          // there is no partial-region case left to get wrong.
+          //
+          // The tiling win is untouched, because it never came from sub-tile
+          // rects: it came from a stroke re-uploading only the tiles it
+          // touches instead of the whole board. A touched tile is a
+          // twenty-fourth of the board.
           function markDirty(rect) {
             for (var i = 0; i < tiles.count; i++) {
               var t = tiles.itemAt(i)
@@ -1091,7 +1105,7 @@ Item {
               var ry = rect.y - t.y
               if (rx + rect.width < 0 || ry + rect.height < 0
                   || rx > t.width || ry > t.height) continue
-              t.markDirty(Qt.rect(rx, ry, rect.width, rect.height))
+              t.requestPaint()
             }
           }
 
