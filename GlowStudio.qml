@@ -29,12 +29,19 @@ Item {
   readonly property string stateDir: home + "/.local/state/omarchy"
   readonly property string statePath: stateDir + "/glow-studio.json"
 
-  // Where the wallpaper render lives. One fixed path rather than a fresh
-  // timestamped file per apply: `omarchy theme bg set` records a symlink to
-  // the file it is handed, so it has to stay put to still be the background
-  // tomorrow, and overwriting it in place keeps old renders from piling up
-  // in the state directory.
-  readonly property string wallpaperPath: stateDir + "/glow-studio-wallpaper.png"
+  // Where a wallpaper render lands. A fresh timestamped name per apply, not
+  // one fixed path: `omarchy theme bg set` records a symlink to the file it
+  // is handed, and the shell's background plugin ignores a set whose path
+  // equals the one already showing. Overwriting a fixed file in place would
+  // therefore be a silent no-op on every apply after the first — the symlink
+  // still resolves to the same string, so nothing repaints. The renders do
+  // not pile up: a successful apply sweeps every older one out of the state
+  // directory, leaving exactly the file the symlink points at.
+  readonly property string wallpaperPrefix: "glow-studio-wallpaper-"
+  function wallpaperRenderPath() {
+    return root.stateDir + "/" + root.wallpaperPrefix
+      + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
+  }
 
   // Pre-rename location. Read once, only if the current file is absent, so a
   // board drawn under the plugin's previous name survives the rename.
@@ -627,7 +634,7 @@ Item {
     if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
     exportProc.wallpaper = forWallpaper
     exportProc.outputPath = forWallpaper
-      ? root.wallpaperPath
+      ? root.wallpaperRenderPath()
       : root.home + "/Pictures/glow-studio-"
         + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
         + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
@@ -678,7 +685,24 @@ Item {
       Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
         exitCode === 0 ? "Wallpaper set" : "Wallpaper not set",
         exitCode === 0 ? imagePath : "omarchy theme bg set exited with " + exitCode])
+      // Only once the symlink points at the new render: until then the old
+      // one is still the desktop background and must not be removed.
+      if (exitCode === 0) {
+        sweepProc.command = ["find", root.stateDir, "-maxdepth", "1", "-type", "f",
+          "-name", root.wallpaperPrefix + "*.png",
+          "!", "-name", imagePath.substring(imagePath.lastIndexOf("/") + 1),
+          "-delete"]
+        sweepProc.running = true
+      }
     }
+  }
+
+  // Drops every wallpaper render but the one currently symlinked. An
+  // argument array like every other command here — the name pattern is
+  // find's own glob, never a shell string.
+  Process {
+    id: sweepProc
+    command: ["true"]
   }
 
   // The component the export Loader instantiates. The Loader itself lives
