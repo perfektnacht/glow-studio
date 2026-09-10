@@ -29,12 +29,28 @@ Item {
   readonly property string stateDir: home + "/.local/state/omarchy"
   readonly property string statePath: stateDir + "/glow-studio.json"
 
-  // Where the wallpaper render lives. One fixed path rather than a fresh
-  // timestamped file per apply: `omarchy theme bg set` records a symlink to
-  // the file it is handed, so it has to stay put to still be the background
-  // tomorrow, and overwriting it in place keeps old renders from piling up
-  // in the state directory.
-  readonly property string wallpaperPath: stateDir + "/glow-studio-wallpaper.png"
+  // Where a wallpaper render lands. A fresh timestamped name per apply, not
+  // one fixed path: `omarchy theme bg set` records a symlink to the file it
+  // is handed, and the shell's background plugin ignores a set whose path
+  // equals the one already showing. Overwriting a fixed file in place would
+  // therefore be a silent no-op on every apply after the first — the symlink
+  // still resolves to the same string, so nothing repaints. The renders do
+  // not pile up: a successful apply sweeps every older one out of the state
+  // directory, leaving exactly the file the symlink points at.
+  readonly property string wallpaperPrefix: "glow-studio-wallpaper-"
+
+  // Counts applies, so two in the same second cannot land on one path. The
+  // timestamp alone is second-resolution: a 2K render finishes inside a
+  // second, so a quick second apply would reuse the name, and reusing the
+  // name is precisely the no-op this whole scheme exists to avoid.
+  property int wallpaperSerial: 0
+
+  function wallpaperRenderPath() {
+    root.wallpaperSerial += 1
+    return root.stateDir + "/" + root.wallpaperPrefix
+      + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss")
+      + "-" + root.wallpaperSerial + ".png"
+  }
 
   // Pre-rename location. Read once, only if the current file is absent, so a
   // board drawn under the plugin's previous name survives the rename.
@@ -77,7 +93,33 @@ Item {
   // click. Locked rather than hovered: nothing hovers on a laptop trackpad,
   // but a locked brush reads the way tap-lock does. The wheel keeps its own
   // job and still resizes the brush.
+  //
+  // Keyboard-only, with no toolbar button: a control you have to travel to
+  // is the one thing a locked brush cannot afford, because the trip back
+  // across the board paints. Leaving the board releases it, and the cursor
+  // ring plus a badge carry the state the button would have shown.
   property bool brushLocked: false
+
+  // The keybind reference, opened with Shift+? and closed the same way, by
+  // Esc, or by clicking it.
+  property bool helpOpen: false
+
+  readonly property var helpBindings: [
+    { keys: "drag", what: "paint with the current brush" },
+    { keys: "right-drag", what: "erase" },
+    { keys: "←↑↓→ then Enter", what: "place pegs at the cursor" },
+    { keys: "shift+click / shift+Enter", what: "straight line from the last stroke" },
+    { keys: "1 – 8", what: "pick a peg colour" },
+    { keys: "E", what: "eraser" },
+    { keys: "[  ]  or scroll", what: "brush size" },
+    { keys: "K", what: "lock brush — the pointer paints as it moves, until it leaves the board" },
+    { keys: "Ctrl+Z / Ctrl+Shift+Z", what: "undo / redo" },
+    { keys: "C", what: "clear the board" },
+    { keys: "L", what: "restore the logo" },
+    { keys: "Ctrl+S", what: "export a PNG at the selected size" },
+    { keys: "Ctrl+W", what: "set the desktop wallpaper" },
+    { keys: "Esc", what: "close Glow Studio" }
+  ]
 
   // True from the first motion of a locked sweep until the pointer leaves
   // the board or rests, so a whole sweep lands in the journal as one
@@ -318,6 +360,9 @@ Item {
   }
 
   function undo() {
+    // Close an open locked sweep first, or it is journalled after the undo
+    // it should have preceded.
+    root.endLockStroke()
     if (root.undoStack.length === 0) return
     var stack = root.undoStack.slice()
     var journal = stack.pop()
@@ -328,6 +373,7 @@ Item {
   }
 
   function redo() {
+    root.endLockStroke()
     if (root.redoStack.length === 0) return
     var stack = root.redoStack.slice()
     var journal = stack.pop()
@@ -340,6 +386,9 @@ Item {
   // Whole-board replacements go through one journal so a mis-clicked Clear is
   // a single Ctrl+Z away.
   function replaceBoard(next) {
+    // Clear and Logo rewrite the whole board: an open locked sweep has to
+    // land in the journal before that does, not after the timer fires.
+    root.endLockStroke()
     var journal = []
     for (var i = 0; i < root.cells.length; i++) {
       if (root.cells[i] !== next[i]) {
@@ -623,11 +672,16 @@ Item {
   // from the screen: the board is vector-ish (discs on a grid), so painting it
   // again at a bigger peg pitch costs one repaint and gives clean edges, where
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
+  // True from the click until the render is written: exportLoader.active
+  // alone leaves a gap, because the loader only goes live when the mkdir
+  // exits, and both toolbar buttons are still pressable during it.
+  readonly property bool exportBusy: exportProc.running || exportLoader.active
+
   function exportPng(forWallpaper) {
-    if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
+    if (root.exportBusy) return   // one at a time; 6K is 75MB of buffer
     exportProc.wallpaper = forWallpaper
     exportProc.outputPath = forWallpaper
-      ? root.wallpaperPath
+      ? root.wallpaperRenderPath()
       : root.home + "/Pictures/glow-studio-"
         + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
         + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
@@ -678,7 +732,24 @@ Item {
       Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
         exitCode === 0 ? "Wallpaper set" : "Wallpaper not set",
         exitCode === 0 ? imagePath : "omarchy theme bg set exited with " + exitCode])
+      // Only once the symlink points at the new render: until then the old
+      // one is still the desktop background and must not be removed.
+      if (exitCode === 0) {
+        sweepProc.command = ["find", root.stateDir, "-maxdepth", "1", "-type", "f",
+          "-name", root.wallpaperPrefix + "*.png",
+          "!", "-name", imagePath.substring(imagePath.lastIndexOf("/") + 1),
+          "-delete"]
+        sweepProc.running = true
+      }
     }
+  }
+
+  // Drops every wallpaper render but the one currently symlinked. An
+  // argument array like every other command here — the name pattern is
+  // find's own glob, never a shell string.
+  Process {
+    id: sweepProc
+    command: ["true"]
   }
 
   // The component the export Loader instantiates. The Loader itself lives
@@ -869,7 +940,9 @@ Item {
         var shift = (event.modifiers & Qt.ShiftModifier) !== 0
 
         if (event.key === Qt.Key_Escape) {
-          root.dismiss()
+          // Esc backs out of the reference before it backs out of the plugin.
+          if (root.helpOpen) root.helpOpen = false
+          else root.dismiss()
         } else if (event.key === Qt.Key_Left) {
           root.moveCursor(-1, 0)
         } else if (event.key === Qt.Key_Right) {
@@ -888,6 +961,10 @@ Item {
           root.redo()
         } else if (ctrl && event.key === Qt.Key_S) {
           root.exportPng(false)
+        } else if (ctrl && event.key === Qt.Key_W) {
+          root.exportPng(true)
+        } else if (event.key === Qt.Key_Question) {
+          root.helpOpen = !root.helpOpen
         } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_8) {
           root.activeColor = event.key - Qt.Key_1 + 1
           root.eraser = false
@@ -934,6 +1011,18 @@ Item {
         color: "#0c0c11"
         border.width: Math.max(1, Style.space(1))
         border.color: Util.alpha(Color.foreground, 0.18)
+
+        // Over the board rather than over the whole window: the toolbar is
+        // what the reference is describing, so covering it would be its own
+        // small cruelty.
+        HelpOverlay {
+          anchors.fill: parent
+          anchors.margins: root.framePadding
+          z: 10
+          visible: root.helpOpen
+          bindings: root.helpBindings
+          onVisibleChanged: if (!visible) root.helpOpen = false
+        }
 
         // The board is a grid of Canvas tiles, not one Canvas.
         //
@@ -994,6 +1083,20 @@ Item {
             }
           }
 
+          // Repaint whole tiles, not sub-rectangles of them.
+          //
+          // Canvas.markDirty on a sub-rect does not reliably repaint what it
+          // was handed: a single stamp could leave a large block filled with
+          // backing and no hole texture, with only a smaller square around
+          // the stroke drawn correctly — a light grey box sitting over the
+          // pegboard until something forced a full repaint. Handing the tile
+          // requestPaint() instead makes every paint cover the whole tile, so
+          // there is no partial-region case left to get wrong.
+          //
+          // The tiling win is untouched, because it never came from sub-tile
+          // rects: it came from a stroke re-uploading only the tiles it
+          // touches instead of the whole board. A touched tile is a
+          // twenty-fourth of the board.
           function markDirty(rect) {
             for (var i = 0; i < tiles.count; i++) {
               var t = tiles.itemAt(i)
@@ -1002,7 +1105,7 @@ Item {
               var ry = rect.y - t.y
               if (rx + rect.width < 0 || ry + rect.height < 0
                   || rx > t.width || ry > t.height) continue
-              t.markDirty(Qt.rect(rx, ry, rect.width, rect.height))
+              t.requestPaint()
             }
           }
 
@@ -1113,7 +1216,17 @@ Item {
             }
 
             // Leaving the board ends a locked sweep where it stands.
-            onExited: root.endLockStroke()
+            // Leaving the board ends the sweep *and* drops the lock. A
+            // locked brush paints unpressed motion, so re-entering the board
+            // on the way back from the toolbar would lay a stroke in from
+            // whichever edge the pointer crossed — and on a trackpad there is
+            // no lifting the pointer to avoid it. Releasing on exit means the
+            // lock only ever applies to a pointer that is already on the
+            // board. K arms it again, from wherever the cursor rests.
+            onExited: {
+              root.endLockStroke()
+              root.brushLocked = false
+            }
 
             // Brush footprint at the cursor. A QML item rather than canvas
             // ink, so moving the cursor never repaints the board.
@@ -1125,14 +1238,21 @@ Item {
               radius: width / 2
               x: (root.cursorCol + 0.5) * root.cell - width / 2
               y: (root.cursorRow + 0.5) * root.cell - height / 2
-              color: "transparent"
               // Brighter while the keyboard is driving: there's no pointer
               // arrow to tell you where you are, so the ring is the only
               // thing marking the spot.
-              border.width: Math.max(1, Style.space(root.keyboardCursor ? 2 : 1))
-              border.color: root.eraser
-                ? Qt.rgba(1, 1, 1, root.keyboardCursor ? 0.75 : 0.5)
-                : Qt.rgba(1, 1, 1, root.keyboardCursor ? 0.6 : 0.32)
+              // Locked reads at the cursor rather than in the toolbar: a
+              // filled, full-strength ring, because that is where you are
+              // looking when it matters and a toolbar button you have to
+              // travel to is the very thing that made locking dangerous.
+              color: root.brushLocked ? Qt.rgba(1, 1, 1, 0.10) : "transparent"
+              border.width: Math.max(1, Style.space(
+                root.brushLocked ? 2 : (root.keyboardCursor ? 2 : 1)))
+              border.color: root.brushLocked
+                ? Qt.rgba(1, 1, 1, 0.9)
+                : (root.eraser
+                  ? Qt.rgba(1, 1, 1, root.keyboardCursor ? 0.75 : 0.5)
+                  : Qt.rgba(1, 1, 1, root.keyboardCursor ? 0.6 : 0.32))
 
               // Snapping between cells looks broken at this size; a short
               // ease reads as the cursor travelling.
@@ -1160,6 +1280,52 @@ Item {
           width: parent.width - Style.spacing.panelPadding * 2
           spacing: Style.spacing.md
 
+          // The palette gets its own centred row above the buttons. It is the
+          // one cluster with no verbs in it — nine values you pick from —
+          // and pulling it out of the Flow buys the buttons a whole line of
+          // width back, which is what stops them wrapping first on a laptop
+          // or a tiled half-window. A Row, not a Flow: nine swatches fit any
+          // width the board itself needs.
+          Row {
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: Style.spacing.controlGap
+
+            // The Column's own spacing is 6px, which is fine between two rows
+            // of buttons but not between a row of round swatches and the
+            // caption that starts the next section — a swatch's lowest pixel
+            // and the word under it were all but touching. The padding rides
+            // on the palette rather than the Column so the gap below the
+            // buttons, down to the status line, stays as it was.
+            bottomPadding: Style.spacing.xl
+
+            Repeater {
+              model: Board.PALETTE
+              Swatch {
+                required property var modelData
+                required property int index
+
+                pegColor: modelData.hex
+                selected: !root.eraser && root.activeColor === index + 1
+                height: Style.spacing.controlHeight
+                onClicked: {
+                  root.activeColor = index + 1
+                  root.eraser = false
+                }
+              }
+            }
+
+            // The eraser, drawn as the peg it places: laying down an unlit
+            // hole is effectively laying down a black peg, so it sits at the
+            // end of the palette as what it is, rather than apart from the
+            // colors as a text button.
+            Swatch {
+              pegColor: "#000000"
+              selected: root.eraser
+              height: Style.spacing.controlHeight
+              onClicked: root.eraser = !root.eraser
+            }
+          }
+
           // A Flow of labelled sections, not one flat Flow of controls: the
           // captions say what each cluster does, and because a section is a
           // single Flow child it wraps to the next line as a unit when the
@@ -1167,40 +1333,30 @@ Item {
           // break. Flow positions its children, so nothing in here may
           // anchor itself — each control is given the shared control height
           // instead, which is what keeps a wrapped row aligned.
+          //
+          // Centred while the sections fit on one line, full width once they
+          // have to wrap. naturalWidth is summed from the children rather
+          // than read off the Flow's own implicitWidth: a Flow's implicit
+          // width is a result of the wrap, so feeding it back in settles at
+          // the widest single section and puts every section on its own row.
+          // A section's implicitWidth depends only on its own contents, so
+          // this sum has no such feedback in it.
           Flow {
-            width: parent.width
-            spacing: Style.spacing.xl
-
-            ToolbarSection {
-              label: "Color"
-
-              Repeater {
-                model: Board.PALETTE
-                Swatch {
-                  required property var modelData
-                  required property int index
-
-                  pegColor: modelData.hex
-                  selected: !root.eraser && root.activeColor === index + 1
-                  height: Style.spacing.controlHeight
-                  onClicked: {
-                    root.activeColor = index + 1
-                    root.eraser = false
-                  }
-                }
+            id: sections
+            readonly property real naturalWidth: {
+              var total = 0
+              var shown = 0
+              for (var i = 0; i < children.length; i++) {
+                if (!children[i].visible) continue
+                total += children[i].implicitWidth
+                shown++
               }
-
-              // The eraser, drawn as the peg it places: laying down an
-              // unlit hole is effectively laying down a black peg, so it
-              // sits at the end of the palette as what it is, rather than
-              // apart from the colors as a text button.
-              Swatch {
-                pegColor: "#000000"
-                selected: root.eraser
-                height: Style.spacing.controlHeight
-                onClicked: root.eraser = !root.eraser
-              }
+              return shown > 0 ? total + spacing * (shown - 1) : 0
             }
+
+            width: Math.min(naturalWidth, parent.width)
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: Style.spacing.xxxl
 
             ToolbarSection {
               label: "Brush"
@@ -1214,13 +1370,6 @@ Item {
                   height: Style.spacing.controlHeight
                   onClicked: root.brushIndex = index
                 }
-              }
-
-              ToolButton {
-                label: "Lock Brush"
-                active: root.brushLocked
-                height: Style.spacing.controlHeight
-                onClicked: root.brushLocked = !root.brushLocked
               }
             }
 
@@ -1255,7 +1404,7 @@ Item {
             }
 
             ToolbarSection {
-              label: "Wallpaper"
+              label: "Output"
 
               Repeater {
                 model: root.exportPresets
@@ -1281,9 +1430,9 @@ Item {
                 // Same render pipeline as Export PNG, so the button rides
                 // the same unavoidably synchronous grab; the label says what
                 // is happening before it lands.
-                label: exportLoader.active && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
-                active: exportLoader.active && exportProc.wallpaper
-                enabled: !exportLoader.active
+                label: root.exportBusy && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
+                active: root.exportBusy && exportProc.wallpaper
+                enabled: !root.exportBusy
                 height: Style.spacing.controlHeight
                 onClicked: root.exportPng(true)
               }
@@ -1293,9 +1442,9 @@ Item {
                 // — no QML API moves them off the GUI thread — so the last
                 // ~600ms of a 6K export is a real hitch. The label at least
                 // says what's happening before it lands.
-                label: exportLoader.active && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
-                active: exportLoader.active && !exportProc.wallpaper
-                enabled: !exportLoader.active
+                label: root.exportBusy && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
+                active: root.exportBusy && !exportProc.wallpaper
+                enabled: !root.exportBusy
                 height: Style.spacing.controlHeight
                 onClicked: root.exportPng(false)
               }
@@ -1312,12 +1461,15 @@ Item {
 
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "drag, or ←↑↓→ then Enter · shift+click / shift+Enter line · "
-                + "right-drag erase · 1-8 color · E eraser · [ ] brush size · "
-                + "K lock brush — the pointer paints as it moves, no click · "
-                + "Ctrl+Z undo · C clear · L logo · "
-                + "2K/4K/6K wallpaper size, OLED = true black · Ctrl+S export · Esc close"
-            color: Util.alpha(Color.menu.text, 0.55)
+            // Doubles as the lock indicator. It lives here rather than on
+            // the board because the board is the drawing surface — a pill
+            // over it sits exactly where a stroke wants to go. The line is
+            // already the toolbar's status line, it is off the pegboard, and
+            // swapping its text costs no layout.
+            text: root.brushLocked
+              ? "brush locked — K to release"
+              : "Shift + ?  for keyboard shortcuts"
+            color: Util.alpha(Color.menu.text, root.brushLocked ? 0.85 : 0.55)
             font.family: Style.font.menuFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight

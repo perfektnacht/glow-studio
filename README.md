@@ -24,22 +24,24 @@ Omarchy 4 or newer, which provides `omarchy-shell` and the Quickshell runtime
 this is written against. Nothing is bundled, vendored, or installed on your
 behalf.
 
-Three system commands are used, all already present on an Omarchy install:
+Four system commands are used, all already present on an Omarchy install:
 
 | Command | Used for | Without it |
 |---------|----------|------------|
 | `notify-send` | Saying where an export or the wallpaper landed | Both still work, just silently |
 | `mkdir` | Creating the directory an export is written to, before the first export | The export fails rather than guessing another directory |
 | `omarchy` | Setting the wallpaper from the toolbar | The button reports that it failed; nothing else changes |
+| `find` | Deleting the previous wallpaper render after a new one is applied | Spent renders accumulate in the state directory |
 
 Nothing else is read or written, and the plugin makes no network connections
 of any kind. Three paths belong to it:
 
 - `~/.local/state/omarchy/glow-studio.json` — your board as you draw it, plus
   the export size and OLED choice
-- `~/.local/state/omarchy/glow-studio-wallpaper.png` — the last wallpaper you
-  applied. The desktop background is a symlink to this file, so every apply
-  overwrites it in place rather than leaving spent renders behind
+- `~/.local/state/omarchy/glow-studio-wallpaper-<timestamp>-<n>.png` — the last
+  wallpaper you applied. The desktop background is a symlink to it, so it has
+  to stay put; a new apply writes a new file and deletes the one before it,
+  leaving exactly one
 - `~/Pictures/glow-studio-<size>-<timestamp>.png` — exports, only when you ask
 
 If you ran this plugin under its previous name, the board saved back then is
@@ -59,7 +61,7 @@ same reason — the desktop background is a symlink to it. To clear those too:
 
 ```bash
 rm ~/.local/state/omarchy/glow-studio.json
-rm ~/.local/state/omarchy/glow-studio-wallpaper.png
+rm ~/.local/state/omarchy/glow-studio-wallpaper-*.png
 ```
 
 Exports in `~/Pictures` are yours and are never touched by removal.
@@ -77,7 +79,7 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
-| `K` | toggle Lock Brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. One continuous sweep is a single undoable stroke, ended by leaving the board or resting the pointer |
+| `K` | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer; Undo, Clear and Logo close the sweep first, so it stays one action. Leaving the board releases the lock, so coming back from the toolbar never draws a line in from the edge — press `K` again to resume |
 | `1`–`8` | pick a peg color |
 | `E` | eraser |
 | `[` `]` | brush size |
@@ -99,11 +101,11 @@ at whichever size is selected in the toolbar. Your choice is remembered.
 `Set Wallpaper` renders the board the same way, at the same selected size, and
 hands the file to `omarchy theme bg set` — Omarchy's own background command —
 so the desktop changes immediately and the choice survives a reboot. The
-render lands at one fixed path,
-`~/.local/state/omarchy/glow-studio-wallpaper.png`, because the background
-system records a symlink to the file it is given: the file has to stay put to
-remain the wallpaper, and overwriting it per apply keeps old renders from
-piling up.
+render lands in `~/.local/state/omarchy/` under a fresh timestamped name each
+time, because the background system records a symlink to the file it is given
+and ignores a path it is already showing: overwriting one fixed file in place
+would leave the desktop on the previous render. Each successful apply deletes
+the renders before it, so one file is kept — the one the symlink points at.
 
 | | |
 |---|---|
@@ -177,9 +179,10 @@ check the claims rather than take them.
 **No code changes were needed.** What the scan confirmed:
 
 - No network access of any kind — no URLs, no remote images, no downloads.
-- No shell strings. The three external commands it runs, `notify-send`,
-  `mkdir`, and `omarchy`, are passed as argument arrays; the only argument
-  that varies is the wallpaper's own file path, which the plugin just wrote.
+- No shell strings. The four external commands it runs, `notify-send`,
+  `mkdir`, `find`, and `omarchy`, are passed as argument arrays; the only
+  arguments that vary are the wallpaper's own file path, which the plugin just
+  wrote, and the fixed name pattern `find` matches its renders by.
 - Three paths are written, all listed under [Requirements](#requirements), and
   nothing outside them.
 - No credentials, no privileged commands, no bundled binaries, no dependencies

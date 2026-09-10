@@ -21,7 +21,9 @@ Item {
   // empty label and a real one keep identical geometry.
   readonly property int captionBand: Math.round(Style.font.caption * 1.4)
 
-  implicitWidth: row.implicitWidth
+  // The caption counts too: a section labelled wider than its controls
+  // should grow, not elide its own name.
+  implicitWidth: Math.max(row.implicitWidth, caption.visible ? caption.implicitWidth : 0)
   implicitHeight: captionBand + Style.spacing.labelGap + Style.spacing.controlHeight
 
   Text {
