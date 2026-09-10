@@ -79,7 +79,7 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
-| `K` | toggle Lock Brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. One continuous sweep is a single undoable stroke, ended by leaving the board or resting the pointer |
+| `K` | toggle Lock Brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. One continuous sweep is a single undoable stroke, ended by leaving the board or resting the pointer. Undo, Clear and Logo close the sweep first, so it stays one action |
 | `1`–`8` | pick a peg color |
 | `E` | eraser |
 | `[` `]` | brush size |

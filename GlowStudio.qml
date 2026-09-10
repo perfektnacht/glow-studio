@@ -325,6 +325,9 @@ Item {
   }
 
   function undo() {
+    // Close an open locked sweep first, or it is journalled after the undo
+    // it should have preceded.
+    root.endLockStroke()
     if (root.undoStack.length === 0) return
     var stack = root.undoStack.slice()
     var journal = stack.pop()
@@ -335,6 +338,7 @@ Item {
   }
 
   function redo() {
+    root.endLockStroke()
     if (root.redoStack.length === 0) return
     var stack = root.redoStack.slice()
     var journal = stack.pop()
@@ -347,6 +351,9 @@ Item {
   // Whole-board replacements go through one journal so a mis-clicked Clear is
   // a single Ctrl+Z away.
   function replaceBoard(next) {
+    // Clear and Logo rewrite the whole board: an open locked sweep has to
+    // land in the journal before that does, not after the timer fires.
+    root.endLockStroke()
     var journal = []
     for (var i = 0; i < root.cells.length; i++) {
       if (root.cells[i] !== next[i]) {
