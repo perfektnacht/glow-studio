@@ -79,7 +79,7 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
-| `K` | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer; Undo, Clear and Logo close the sweep first, so it stays one action. Leaving the board releases the lock, so coming back from the toolbar never draws a line in from the edge — press `K` again to resume |
+| `K` | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer; Undo, Clear and Logo close the sweep first, so it stays one action. The lock stays on until `K` or the **Lock Brush** button turns it off, including while the pointer is off the board — so a hand that wanders off the pegboard and back keeps painting. The cost is that crossing the board to reach a toolbar control paints on the way; Undo takes it back |
 | `1`–`8` | pick a peg color |
 | `E` | eraser |
 | `[` `]` | brush size |

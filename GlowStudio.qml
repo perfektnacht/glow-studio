@@ -94,10 +94,15 @@ Item {
   // but a locked brush reads the way tap-lock does. The wheel keeps its own
   // job and still resizes the brush.
   //
-  // Keyboard-only, with no toolbar button: a control you have to travel to
-  // is the one thing a locked brush cannot afford, because the trip back
-  // across the board paints. Leaving the board releases it, and the cursor
-  // ring plus a badge carry the state the button would have shown.
+  // A plain toggle: it stays on until the button or K turns it off, and
+  // leaving the board does not release it. That is the opposite of what the
+  // hazard alone would argue for — while locked, crossing the board to reach
+  // any toolbar control paints a line in from the edge. It is the right
+  // trade for who this is for. The mode exists because click-and-drag is
+  // fatiguing on a trackpad, and the pointers it serves wander off the
+  // pegboard constantly; releasing on exit flips the mode off mid-scribble,
+  // which reads as the feature breaking. A stray line from the edge reads as
+  // a stray line, and Undo takes it back.
   property bool brushLocked: false
 
   // The keybind reference, opened with Shift+? and closed the same way, by
@@ -112,7 +117,7 @@ Item {
     { keys: "1 – 8", what: "pick a peg colour" },
     { keys: "E", what: "eraser" },
     { keys: "[  ]  or scroll", what: "brush size" },
-    { keys: "K", what: "lock brush — the pointer paints as it moves, until it leaves the board" },
+    { keys: "K", what: "lock brush — the pointer paints as it moves, until you turn it off" },
     { keys: "Ctrl+Z / Ctrl+Shift+Z", what: "undo / redo" },
     { keys: "C", what: "clear the board" },
     { keys: "L", what: "restore the logo" },
@@ -1215,18 +1220,13 @@ Item {
                 : Math.max(0, root.brushIndex - 1)
             }
 
-            // Leaving the board ends a locked sweep where it stands.
-            // Leaving the board ends the sweep *and* drops the lock. A
-            // locked brush paints unpressed motion, so re-entering the board
-            // on the way back from the toolbar would lay a stroke in from
-            // whichever edge the pointer crossed — and on a trackpad there is
-            // no lifting the pointer to avoid it. Releasing on exit means the
-            // lock only ever applies to a pointer that is already on the
-            // board. K arms it again, from wherever the cursor rests.
-            onExited: {
-              root.endLockStroke()
-              root.brushLocked = false
-            }
+            // Ends a locked sweep where it stands, and only that: the lock
+            // itself survives leaving the board, so a pointer that wanders
+            // off the pegboard and back keeps painting. Closing the sweep is
+            // a journal boundary, not a release — it is what makes the run
+            // out and the run back two undo actions rather than one open
+            // stroke spanning both.
+            onExited: root.endLockStroke()
 
             // Brush footprint at the cursor. A QML item rather than canvas
             // ink, so moving the cursor never repaints the board.
@@ -1371,6 +1371,17 @@ Item {
                   onClicked: root.brushIndex = index
                 }
               }
+
+              // Reachable without the keyboard, because the people this mode
+              // was built for are not using one. It sits at the end of the
+              // Brush row rather than in Edit: it changes how the brush is
+              // applied, and it is the only control here that stays lit.
+              ToolButton {
+                label: "Lock Brush"
+                active: root.brushLocked
+                height: Style.spacing.controlHeight
+                onClicked: root.brushLocked = !root.brushLocked
+              }
             }
 
             ToolbarSection {
@@ -1467,7 +1478,7 @@ Item {
             // already the toolbar's status line, it is off the pegboard, and
             // swapping its text costs no layout.
             text: root.brushLocked
-              ? "brush locked — K to release"
+              ? "brush locked — Lock Brush or K to release"
               : "Shift + ?  for keyboard shortcuts"
             color: Util.alpha(Color.menu.text, root.brushLocked ? 0.85 : 0.55)
             font.family: Style.font.menuFamily
