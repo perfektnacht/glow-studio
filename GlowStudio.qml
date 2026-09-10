@@ -26,7 +26,15 @@ Item {
 
   readonly property string pluginId: (manifest && manifest.id) || "perfektnacht.glow-studio"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string statePath: home + "/.local/state/omarchy/glow-studio.json"
+  readonly property string stateDir: home + "/.local/state/omarchy"
+  readonly property string statePath: stateDir + "/glow-studio.json"
+
+  // Where the wallpaper render lives. One fixed path rather than a fresh
+  // timestamped file per apply: `omarchy theme bg set` records a symlink to
+  // the file it is handed, so it has to stay put to still be the background
+  // tomorrow, and overwriting it in place keeps old renders from piling up
+  // in the state directory.
+  readonly property string wallpaperPath: stateDir + "/glow-studio-wallpaper.png"
 
   // Pre-rename location. Read once, only if the current file is absent, so a
   // board drawn under the plugin's previous name survives the rename.
@@ -63,6 +71,18 @@ Item {
   // visits, on every motion event, so recomputing the disc there was churning
   // ~37 short-lived arrays per cell at the largest brush.
   readonly property var brushFootprints: brushRadii.map(function(r) { return Board.brushOffsets(r) })
+
+  // Lock Brush mode: while it's on, the brush behaves as if the button
+  // were held down — moving the pointer over the board paints, with no
+  // click. Locked rather than hovered: nothing hovers on a laptop trackpad,
+  // but a locked brush reads the way tap-lock does. The wheel keeps its own
+  // job and still resizes the brush.
+  property bool brushLocked: false
+
+  // True from the first motion of a locked sweep until the pointer leaves
+  // the board or rests, so a whole sweep lands in the journal as one
+  // stroke — the same single-undo guarantee a drag has.
+  property bool lockStrokeOpen: false
 
   property var undoStack: []
   property var redoStack: []
@@ -217,7 +237,44 @@ Item {
     root.endStroke()
   }
 
+  // One pointer motion with the brush locked and no button held: the same
+  // stamp a drag would make, at the pointer. Consecutive motions go
+  // through extendStroke, so a sweep draws a continuous line rather than a
+  // dotted one.
+  function lockStamp() {
+    if (root.lockStrokeOpen) {
+      root.extendStroke(root.cursorCol, root.cursorRow)
+    } else {
+      // Flag after beginStroke, not before: beginStroke closes any open
+      // locked stroke on the way in, and it must not close this one.
+      root.beginStroke(root.cursorCol, root.cursorRow, false)
+      root.lockStrokeOpen = true
+    }
+    lockStrokeEnd.restart()
+  }
+
+  // Ends the locked sweep when the pointer rests. 300ms is short enough
+  // that the stroke finishes as soon as the motion does, and long enough
+  // that a deliberate slow trace still lands as one action. Leaving the
+  // board ends the stroke immediately, without waiting out the timer.
+  function endLockStroke() {
+    if (!root.lockStrokeOpen) return
+    root.lockStrokeOpen = false
+    lockStrokeEnd.stop()
+    root.endStroke()
+  }
+
+  Timer {
+    id: lockStrokeEnd
+    interval: 300
+    onTriggered: root.endLockStroke()
+  }
+
   function beginStroke(col, row, connect) {
+    // A click or Enter mid-sweep takes the board over: close the open
+    // locked stroke as its own undo action first, or its journal is dropped
+    // when the next line resets it.
+    root.endLockStroke()
     root.strokeJournal = []
     if (connect && root.lastCol >= 0) root.extendStroke(col, row)
     else root.stamp(col, row)
@@ -566,11 +623,16 @@ Item {
   // from the screen: the board is vector-ish (discs on a grid), so painting it
   // again at a bigger peg pitch costs one repaint and gives clean edges, where
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
-  function exportPng() {
+  function exportPng(forWallpaper) {
     if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
-    exportProc.outputPath = root.home + "/Pictures/glow-studio-"
-      + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
-      + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
+    exportProc.wallpaper = forWallpaper
+    exportProc.outputPath = forWallpaper
+      ? root.wallpaperPath
+      : root.home + "/Pictures/glow-studio-"
+        + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
+        + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
+    exportProc.command = ["mkdir", "-p",
+      forWallpaper ? root.stateDir : root.home + "/Pictures"]
     exportProc.running = true
   }
 
@@ -581,11 +643,42 @@ Item {
       ok ? path : "Could not write " + path])
   }
 
+  // Hand a finished wallpaper render to Omarchy's own background command
+  // rather than reaching into Hyprland or the theme system from here:
+  // `omarchy theme bg set` does both halves — points the shell's background
+  // symlink at the file, and updates the running desktop — so the wallpaper
+  // sticks across reboots and keeps working with the background switcher
+  // afterwards.
+  function applyWallpaper(ok, path) {
+    if (!ok) {
+      Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
+        "Wallpaper not set", "Could not write " + path])
+      return
+    }
+    wallpaperProc.imagePath = path
+    wallpaperProc.command = ["omarchy", "theme", "bg", "set", path]
+    wallpaperProc.running = true
+  }
+
   Process {
     id: exportProc
     property string outputPath: ""
+    property bool wallpaper: false
     command: ["mkdir", "-p", root.home + "/Pictures"]
     onExited: exportLoader.active = true
+  }
+
+  Process {
+    id: wallpaperProc
+    // The path currently being applied, so the completion notification can
+    // say what landed where.
+    property string imagePath: ""
+    command: ["omarchy", "theme", "bg", "set", ""]
+    onExited: function(exitCode) {
+      Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
+        exitCode === 0 ? "Wallpaper set" : "Wallpaper not set",
+        exitCode === 0 ? imagePath : "omarchy theme bg set exited with " + exitCode])
+    }
   }
 
   // The component the export Loader instantiates. The Loader itself lives
@@ -641,12 +734,15 @@ Item {
         // supersampling rather than going to waste.
         var scale = root.grabScale > 0 ? root.grabScale : 1
         var started = grabToImage(function(result) {
-          root.reportExport(result.saveToFile(path), path)
+          var ok = result.saveToFile(path)
+          if (exportProc.wallpaper) root.applyWallpaper(ok, path)
+          else root.reportExport(ok, path)
           exportLoader.active = false
         }, Qt.size(Math.round(preset.width / scale),
                    Math.round(preset.height / scale)))
         if (!started) {
-          root.reportExport(false, path)
+          if (exportProc.wallpaper) root.applyWallpaper(false, path)
+          else root.reportExport(false, path)
           exportLoader.active = false
         }
       }
@@ -791,7 +887,7 @@ Item {
         } else if (ctrl && (event.key === Qt.Key_Y)) {
           root.redo()
         } else if (ctrl && event.key === Qt.Key_S) {
-          root.exportPng()
+          root.exportPng(false)
         } else if (event.key >= Qt.Key_1 && event.key <= Qt.Key_8) {
           root.activeColor = event.key - Qt.Key_1 + 1
           root.eraser = false
@@ -801,6 +897,8 @@ Item {
           root.brushIndex = Math.max(0, root.brushIndex - 1)
         } else if (event.key === Qt.Key_BracketRight) {
           root.brushIndex = Math.min(root.brushRadii.length - 1, root.brushIndex + 1)
+        } else if (event.key === Qt.Key_K) {
+          root.brushLocked = !root.brushLocked
         } else if (event.key === Qt.Key_C) {
           root.clearBoard()
         } else if (event.key === Qt.Key_L) {
@@ -990,9 +1088,14 @@ Item {
               var previousCol = root.cursorCol
               var previousRow = root.cursorRow
               track(mouse)
-              if (!pressed) return
-              if (root.cursorCol === previousCol && root.cursorRow === previousRow) return
-              root.extendStroke(root.cursorCol, root.cursorRow)
+              if (pressed) {
+                if (root.cursorCol === previousCol && root.cursorRow === previousRow) return
+                root.extendStroke(root.cursorCol, root.cursorRow)
+              } else if (root.brushLocked) {
+                // A locked brush paints unpressed motion the way a drag
+                // paints pressed motion.
+                root.lockStamp()
+              }
             }
 
             onReleased: function(mouse) {
@@ -1008,6 +1111,9 @@ Item {
                 ? Math.min(root.brushRadii.length - 1, root.brushIndex + 1)
                 : Math.max(0, root.brushIndex - 1)
             }
+
+            // Leaving the board ends a locked sweep where it stands.
+            onExited: root.endLockStroke()
 
             // Brush footprint at the cursor. A QML item rather than canvas
             // ink, so moving the cursor never repaints the board.
@@ -1054,143 +1160,162 @@ Item {
           width: parent.width - Style.spacing.panelPadding * 2
           spacing: Style.spacing.md
 
-          // Flow, not Row: in a resizable window the controls have to wrap
-          // rather than run off the edge. Flow positions its children, so
-          // nothing in here may anchor itself — each control is given the
-          // shared control height instead, which is what keeps a wrapped row
-          // aligned.
+          // A Flow of labelled sections, not one flat Flow of controls: the
+          // captions say what each cluster does, and because a section is a
+          // single Flow child it wraps to the next line as a unit when the
+          // window narrows, rather than spilling lone buttons across the
+          // break. Flow positions its children, so nothing in here may
+          // anchor itself — each control is given the shared control height
+          // instead, which is what keeps a wrapped row aligned.
           Flow {
             width: parent.width
-            spacing: Style.spacing.controlGap
+            spacing: Style.spacing.xl
 
-            Repeater {
-              model: Board.PALETTE
-              Swatch {
-                required property var modelData
-                required property int index
+            ToolbarSection {
+              label: "Color"
 
-                pegColor: modelData.hex
-                selected: !root.eraser && root.activeColor === index + 1
-                height: Style.spacing.controlHeight
-                onClicked: {
-                  root.activeColor = index + 1
-                  root.eraser = false
+              Repeater {
+                model: Board.PALETTE
+                Swatch {
+                  required property var modelData
+                  required property int index
+
+                  pegColor: modelData.hex
+                  selected: !root.eraser && root.activeColor === index + 1
+                  height: Style.spacing.controlHeight
+                  onClicked: {
+                    root.activeColor = index + 1
+                    root.eraser = false
+                  }
                 }
               }
-            }
 
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
-
-            ToolButton {
-              label: "Eraser"
-              active: root.eraser
-              height: Style.spacing.controlHeight
-              onClicked: root.eraser = !root.eraser
-            }
-
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
-
-            Repeater {
-              model: root.brushRadii.length
-              ToolButton {
-                required property int index
-                label: String(index + 1)
-                active: root.brushIndex === index
+              // The eraser, drawn as the peg it places: laying down an
+              // unlit hole is effectively laying down a black peg, so it
+              // sits at the end of the palette as what it is, rather than
+              // apart from the colors as a text button.
+              Swatch {
+                pegColor: "#000000"
+                selected: root.eraser
                 height: Style.spacing.controlHeight
-                onClicked: root.brushIndex = index
+                onClicked: root.eraser = !root.eraser
               }
             }
 
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
+            ToolbarSection {
+              label: "Brush"
 
-            ToolButton {
-              label: "Undo"
-              enabled: root.undoStack.length > 0
-              height: Style.spacing.controlHeight
-              onClicked: root.undo()
-            }
+              Repeater {
+                model: root.brushRadii.length
+                ToolButton {
+                  required property int index
+                  label: String(index + 1)
+                  active: root.brushIndex === index
+                  height: Style.spacing.controlHeight
+                  onClicked: root.brushIndex = index
+                }
+              }
 
-            ToolButton {
-              label: "Redo"
-              enabled: root.redoStack.length > 0
-              height: Style.spacing.controlHeight
-              onClicked: root.redo()
-            }
-
-            ToolButton {
-              label: "Clear"
-              height: Style.spacing.controlHeight
-              onClicked: root.clearBoard()
-            }
-
-            ToolButton {
-              label: "Logo"
-              height: Style.spacing.controlHeight
-              onClicked: root.restoreLogo()
-            }
-
-            Rectangle {
-              width: Math.max(1, Style.space(1))
-              height: Style.spacing.controlHeight
-              color: Util.alpha(Color.menu.text, 0.18)
-            }
-
-            Repeater {
-              model: root.exportPresets
               ToolButton {
-                required property var modelData
-                required property int index
-
-                label: modelData.label
-                active: root.exportPreset === index
+                label: "Lock Brush"
+                active: root.brushLocked
                 height: Style.spacing.controlHeight
-                onClicked: { root.exportPreset = index; root.scheduleSave() }
+                onClicked: root.brushLocked = !root.brushLocked
               }
             }
 
-            ToolButton {
-              label: "OLED"
-              active: root.oled
-              height: Style.spacing.controlHeight
-              onClicked: { root.oled = !root.oled; root.scheduleSave() }
+            ToolbarSection {
+              label: "Edit"
+
+              ToolButton {
+                label: "Undo"
+                enabled: root.undoStack.length > 0
+                height: Style.spacing.controlHeight
+                onClicked: root.undo()
+              }
+
+              ToolButton {
+                label: "Redo"
+                enabled: root.redoStack.length > 0
+                height: Style.spacing.controlHeight
+                onClicked: root.redo()
+              }
+
+              ToolButton {
+                label: "Clear"
+                height: Style.spacing.controlHeight
+                onClicked: root.clearBoard()
+              }
+
+              ToolButton {
+                label: "Logo"
+                height: Style.spacing.controlHeight
+                onClicked: root.restoreLogo()
+              }
             }
 
-            ToolButton {
-              // The grab readback and PNG encode are unavoidably synchronous
-              // — no QML API moves them off the GUI thread — so the last
-              // ~600ms of a 6K export is a real hitch. The label at least
-              // says what's happening before it lands.
-              label: exportLoader.active ? "Exporting…" : "Export PNG"
-              active: exportLoader.active
-              enabled: !exportLoader.active
-              height: Style.spacing.controlHeight
-              onClicked: root.exportPng()
+            ToolbarSection {
+              label: "Wallpaper"
+
+              Repeater {
+                model: root.exportPresets
+                ToolButton {
+                  required property var modelData
+                  required property int index
+
+                  label: modelData.label
+                  active: root.exportPreset === index
+                  height: Style.spacing.controlHeight
+                  onClicked: { root.exportPreset = index; root.scheduleSave() }
+                }
+              }
+
+              ToolButton {
+                label: "OLED"
+                active: root.oled
+                height: Style.spacing.controlHeight
+                onClicked: { root.oled = !root.oled; root.scheduleSave() }
+              }
+
+              ToolButton {
+                // Same render pipeline as Export PNG, so the button rides
+                // the same unavoidably synchronous grab; the label says what
+                // is happening before it lands.
+                label: exportLoader.active && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
+                active: exportLoader.active && exportProc.wallpaper
+                enabled: !exportLoader.active
+                height: Style.spacing.controlHeight
+                onClicked: root.exportPng(true)
+              }
+
+              ToolButton {
+                // The grab readback and PNG encode are unavoidably synchronous
+                // — no QML API moves them off the GUI thread — so the last
+                // ~600ms of a 6K export is a real hitch. The label at least
+                // says what's happening before it lands.
+                label: exportLoader.active && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
+                active: exportLoader.active && !exportProc.wallpaper
+                enabled: !exportLoader.active
+                height: Style.spacing.controlHeight
+                onClicked: root.exportPng(false)
+              }
             }
 
-            ToolButton {
-              label: "Close"
-              height: Style.spacing.controlHeight
-              onClicked: root.dismiss()
+            ToolbarSection {
+              ToolButton {
+                label: "Close"
+                height: Style.spacing.controlHeight
+                onClicked: root.dismiss()
+              }
             }
           }
 
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "drag, or ←↑↓→ then Enter · shift+click / shift+Enter line · "
-                + "right-drag erase · 1-8 color · E eraser · "
-                + "[ ] or scroll brush size · Ctrl+Z undo · C clear · L logo · "
+                + "right-drag erase · 1-8 color · E eraser · [ ] brush size · "
+                + "K lock brush — the pointer paints as it moves, no click · "
+                + "Ctrl+Z undo · C clear · L logo · "
                 + "2K/4K/6K wallpaper size, OLED = true black · Ctrl+S export · Esc close"
             color: Util.alpha(Color.menu.text, 0.55)
             font.family: Style.font.menuFamily

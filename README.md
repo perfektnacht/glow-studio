@@ -24,18 +24,22 @@ Omarchy 4 or newer, which provides `omarchy-shell` and the Quickshell runtime
 this is written against. Nothing is bundled, vendored, or installed on your
 behalf.
 
-Two system commands are used, both already present on an Omarchy install:
+Three system commands are used, all already present on an Omarchy install:
 
 | Command | Used for | Without it |
 |---------|----------|------------|
-| `notify-send` | Saying where an export landed | Exports still work, just silently |
-| `mkdir` | Creating `~/Pictures` before the first export | The export fails rather than guessing another directory |
+| `notify-send` | Saying where an export or the wallpaper landed | Both still work, just silently |
+| `mkdir` | Creating the directory an export is written to, before the first export | The export fails rather than guessing another directory |
+| `omarchy` | Setting the wallpaper from the toolbar | The button reports that it failed; nothing else changes |
 
 Nothing else is read or written, and the plugin makes no network connections
-of any kind. Two paths belong to it:
+of any kind. Three paths belong to it:
 
 - `~/.local/state/omarchy/glow-studio.json` — your board as you draw it, plus
   the export size and OLED choice
+- `~/.local/state/omarchy/glow-studio-wallpaper.png` — the last wallpaper you
+  applied. The desktop background is a symlink to this file, so every apply
+  overwrites it in place rather than leaving spent renders behind
 - `~/Pictures/glow-studio-<size>-<timestamp>.png` — exports, only when you ask
 
 If you ran this plugin under its previous name, the board saved back then is
@@ -50,10 +54,12 @@ omarchy plugin remove perfektnacht.glow-studio
 
 That disables it and deletes the plugin directory. Your board is deliberately
 kept: it lives outside the checkout, so removing and reinstalling brings the
-drawing back exactly as you left it. To clear that too:
+drawing back exactly as you left it. The last wallpaper render is kept for the
+same reason — the desktop background is a symlink to it. To clear those too:
 
 ```bash
 rm ~/.local/state/omarchy/glow-studio.json
+rm ~/.local/state/omarchy/glow-studio-wallpaper.png
 ```
 
 Exports in `~/Pictures` are yours and are never touched by removal.
@@ -71,6 +77,7 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
+| `K` | toggle Lock Brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. One continuous sweep is a single undoable stroke, ended by leaving the board or resting the pointer |
 | `1`–`8` | pick a peg color |
 | `E` | eraser |
 | `[` `]` | brush size |
@@ -88,6 +95,15 @@ start over from the logo.
 
 `Export PNG` (or `Ctrl+S`) writes to `~/Pictures/glow-studio-<size>-<stamp>.png`
 at whichever size is selected in the toolbar. Your choice is remembered.
+
+`Set Wallpaper` renders the board the same way, at the same selected size, and
+hands the file to `omarchy theme bg set` — Omarchy's own background command —
+so the desktop changes immediately and the choice survives a reboot. The
+render lands at one fixed path,
+`~/.local/state/omarchy/glow-studio-wallpaper.png`, because the background
+system records a symlink to the file it is given: the file has to stay put to
+remain the wallpaper, and overwriting it per apply keeps old renders from
+piling up.
 
 | | |
 |---|---|
@@ -161,9 +177,10 @@ check the claims rather than take them.
 **No code changes were needed.** What the scan confirmed:
 
 - No network access of any kind — no URLs, no remote images, no downloads.
-- No shell strings. The two external commands it runs, `notify-send` and
-  `mkdir`, are passed as argument arrays with fixed arguments.
-- Two paths are written, both listed under [Requirements](#requirements), and
+- No shell strings. The three external commands it runs, `notify-send`,
+  `mkdir`, and `omarchy`, are passed as argument arrays; the only argument
+  that varies is the wallpaper's own file path, which the plugin just wrote.
+- Three paths are written, all listed under [Requirements](#requirements), and
   nothing outside them.
 - No credentials, no privileged commands, no bundled binaries, no dependencies
   beyond what Omarchy already ships.
