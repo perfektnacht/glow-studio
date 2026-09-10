@@ -630,8 +630,13 @@ Item {
   // from the screen: the board is vector-ish (discs on a grid), so painting it
   // again at a bigger peg pitch costs one repaint and gives clean edges, where
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
+  // True from the click until the render is written: exportLoader.active
+  // alone leaves a gap, because the loader only goes live when the mkdir
+  // exits, and both toolbar buttons are still pressable during it.
+  readonly property bool exportBusy: exportProc.running || exportLoader.active
+
   function exportPng(forWallpaper) {
-    if (exportLoader.active) return   // one at a time; 6K is 75MB of buffer
+    if (root.exportBusy) return   // one at a time; 6K is 75MB of buffer
     exportProc.wallpaper = forWallpaper
     exportProc.outputPath = forWallpaper
       ? root.wallpaperRenderPath()
@@ -1305,9 +1310,9 @@ Item {
                 // Same render pipeline as Export PNG, so the button rides
                 // the same unavoidably synchronous grab; the label says what
                 // is happening before it lands.
-                label: exportLoader.active && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
-                active: exportLoader.active && exportProc.wallpaper
-                enabled: !exportLoader.active
+                label: root.exportBusy && exportProc.wallpaper ? "Setting…" : "Set Wallpaper"
+                active: root.exportBusy && exportProc.wallpaper
+                enabled: !root.exportBusy
                 height: Style.spacing.controlHeight
                 onClicked: root.exportPng(true)
               }
@@ -1317,9 +1322,9 @@ Item {
                 // — no QML API moves them off the GUI thread — so the last
                 // ~600ms of a 6K export is a real hitch. The label at least
                 // says what's happening before it lands.
-                label: exportLoader.active && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
-                active: exportLoader.active && !exportProc.wallpaper
-                enabled: !exportLoader.active
+                label: root.exportBusy && !exportProc.wallpaper ? "Exporting…" : "Export PNG"
+                active: root.exportBusy && !exportProc.wallpaper
+                enabled: !root.exportBusy
                 height: Style.spacing.controlHeight
                 onClicked: root.exportPng(false)
               }
