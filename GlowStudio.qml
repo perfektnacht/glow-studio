@@ -1205,7 +1205,7 @@ Item {
           // instead, which is what keeps a wrapped row aligned.
           Flow {
             width: parent.width
-            spacing: Style.spacing.xl
+            spacing: Style.spacing.xxxl
 
             ToolbarSection {
               label: "Color"
@@ -1291,7 +1291,7 @@ Item {
             }
 
             ToolbarSection {
-              label: "Wallpaper"
+              label: "Output"
 
               Repeater {
                 model: root.exportPresets
