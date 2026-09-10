@@ -1,0 +1,48 @@
+name: qmllint
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  qmllint:
+    runs-on: ubuntu-latest
+    # Arch, not ubuntu-latest's own image: Omarchy is Arch, and Ubuntu ships
+    # Qt 6.4's qmllint, which predates the warning categories .qmllint.ini
+    # names — it ignores the settings file and fails on analysis noise. This
+    # runs the same qmllint a contributor has on their desktop.
+    container: archlinux:latest
+
+    steps:
+      # Before checkout, so actions/checkout can clone rather than fall back
+      # to a tarball.
+      - name: Install qmllint and the Quickshell types the plugin builds on
+        run: pacman -Sy --noconfirm --needed qt6-declarative quickshell git
+
+      - uses: actions/checkout@v4
+
+      # The plugin imports qs.Commons from the shell it runs inside, so the
+      # lint is only meaningful against a real Omarchy checkout. Tracking the
+      # default branch rather than a tag is deliberate: this plugin declares
+      # Omarchy 4 or newer, and a break upstream is worth hearing about here
+      # before someone hits it on their desktop.
+      - uses: actions/checkout@v4
+        with:
+          repository: basecamp/omarchy
+          path: omarchy
+          clean: false
+
+      - name: Lint
+        run: |
+          # Quickshell exposes the shell root as the module `qs`, so
+          # `import qs.Commons` resolves only when an import path contains a
+          # directory of that name. Settings come from .qmllint.ini, which is
+          # what makes this reproducible with the same command locally.
+          mkdir -p imports
+          ln -sfn "$PWD/omarchy/shell" imports/qs
+          /usr/lib/qt6/bin/qmllint --version
+          # -W 0 is what makes this a gate. qmllint defaults to
+          # --max-warnings -1, where warnings print and the exit code stays 0
+          # — a broken import would scroll past under a green check.
+          /usr/lib/qt6/bin/qmllint -W 0 -I imports *.qml
