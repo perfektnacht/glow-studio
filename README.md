@@ -38,7 +38,7 @@ of any kind. Three paths belong to it:
 
 - `~/.local/state/omarchy/glow-studio.json` — your board as you draw it, plus
   the export size and OLED choice
-- `~/.local/state/omarchy/glow-studio-wallpaper-<timestamp>.png` — the last
+- `~/.local/state/omarchy/glow-studio-wallpaper-<timestamp>-<n>.png` — the last
   wallpaper you applied. The desktop background is a symlink to it, so it has
   to stay put; a new apply writes a new file and deletes the one before it,
   leaving exactly one
@@ -79,7 +79,7 @@ where the brush will land, whichever one you last touched.
 | `Enter` | place pegs at the cursor — the same as a left click |
 | shift + click, shift + `Enter` | straight line from the end of the last stroke |
 | scroll | brush size |
-| `K` | toggle Lock Brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. One continuous sweep is a single undoable stroke, ended by leaving the board or resting the pointer. Undo, Clear and Logo close the sweep first, so it stays one action |
+| `K` | lock the brush: while on, moving the pointer over the board lays the current brush or eraser down — no click, no wheel. The cursor ring fills in and the toolbar's status line says so. One continuous sweep is a single undoable stroke, ended by resting the pointer; Undo, Clear and Logo close the sweep first, so it stays one action. Leaving the board releases the lock, so coming back from the toolbar never draws a line in from the edge — press `K` again to resume |
 | `1`–`8` | pick a peg color |
 | `E` | eraser |
 | `[` `]` | brush size |
