@@ -1,0 +1,230 @@
+#!/bin/bash
+# Glow Studio's state-directory work, done through a directory descriptor
+# rather than by path.
+#
+#   omarchy-glow-studio-wallpaper stage              prepare a staging file
+#   omarchy-glow-studio-wallpaper publish <name>     move the render into place
+#   omarchy-glow-studio-wallpaper sweep <keep>       drop every render but one
+#
+# Why this exists at all: the plugin writes a wallpaper render into
+# ~/.local/state/omarchy and deletes the render before it. Done by path, both
+# halves trust every ancestor of that directory — the kernel resolves
+# ~/.local/state before `mkdir`, before the render is written, and before any
+# deletion, so a symlink planted at any level silently redirects the write and
+# the delete somewhere else entirely.
+#
+# So the directory is opened one component at a time, refusing a symlink at
+# each step and checking the ownership and permissions of what actually got
+# opened, and everything afterwards happens through that descriptor:
+# /proc/$$/fd/N is resolved by the kernel to the pinned inode rather than by
+# walking the original path again, so no later swap can move where a write or
+# an unlink lands. QML cannot open a descriptor — Quickshell's Process only
+# runs commands — which is why this is a script and not another few lines of
+# GlowStudio.qml.
+
+set -euo pipefail
+
+# The path is walked, never handed over whole. open_state_dir fills in
+# STATE_BASE, which is how everything downstream reaches it, and STATE_PATH,
+# which is only ever used to tell a human where something went.
+STATE_PARTS=(.local state omarchy)
+STATE_BASE=""
+STATE_PATH=""
+
+RENDER_PREFIX="glow-studio-wallpaper-"
+STAGE_DIR="glow-studio"
+STAGE_NAME="render.png"
+
+# Distinct codes, because the caller is a QML Process that reads an exit
+# status and nothing else: the notification it raises has to say which of
+# these went wrong without parsing anything. The detail below goes to stderr,
+# which on a running desktop is the shell log.
+E_USAGE=2
+E_STATE=3    # the state directory is not safe to write
+E_RUNTIME=4  # no usable XDG_RUNTIME_DIR to stage in
+E_RENDER=5   # the staged render is missing or not what we left there
+
+# Asked once. Every check below compares against it.
+MY_UID=$(id -u)
+
+die() {
+  local code=$1
+  shift
+  echo "${0##*/}: $*" >&2
+  exit "$code"
+}
+
+# Checks what was actually opened, not what was asked for. The symlink test
+# before an open and this test after it are two different things: the first
+# refuses an obvious redirect, the second catches a component swapped in the
+# window between the test and the open, because by then the descriptor is
+# pinned and this reads the inode behind it.
+#
+# Owner, not permissions alone: a directory someone else owns can be replaced
+# by them at any moment, whatever its mode says today. Group and other write
+# are refused for the same reason one step removed.
+verify_dir() {
+  local fd=$1 what=$2 code=$3 info uid mode type
+  info=$(stat -L -c '%u %a %F' "/proc/$$/fd/$fd") || die "$code" "cannot stat $what"
+  read -r uid mode type <<<"$info"
+  [[ $type == directory ]] || die "$code" "$what is not a directory"
+  [[ $uid == "$MY_UID" ]] || die "$code" "$what is owned by uid $uid, not you"
+  (( 8#$mode & 0022 )) && die "$code" "$what is writable by group or others (mode $mode)"
+  return 0
+}
+
+# Walks $HOME -> .local -> state -> omarchy, creating what is missing, and
+# leaves the descriptor for the last one in STATE_BASE. Missing components are
+# created at 700: this is state, nobody else needs it, and a directory only we
+# can write is one nobody else can plant anything in.
+open_state_dir() {
+  local fd next part base path
+  [[ -n ${HOME:-} ]] || die "$E_STATE" "HOME is not set"
+  exec {fd}< "$HOME" || die "$E_STATE" "cannot open HOME ($HOME)"
+  verify_dir "$fd" "\$HOME" "$E_STATE"
+  path=$HOME
+
+  for part in "${STATE_PARTS[@]}"; do
+    base="/proc/$$/fd/$fd"
+    path="$path/$part"
+    if [[ -L $base/$part ]]; then
+      die "$E_STATE" "$part is a symlink — refusing to publish through it"
+    fi
+    if [[ ! -e $base/$part ]]; then
+      mkdir -m 700 "$base/$part" || die "$E_STATE" "cannot create $part"
+    fi
+    exec {next}< "$base/$part" || die "$E_STATE" "cannot open $part"
+    verify_dir "$next" "$part" "$E_STATE"
+    exec {fd}<&-
+    fd=$next
+  done
+
+  STATE_BASE="/proc/$$/fd/$fd"
+  STATE_PATH=$path
+}
+
+# The render is staged here rather than in the state directory, so that the
+# one write Qt does by path — grabToImage saves to a file name, it cannot be
+# handed a descriptor — happens outside the tree this script is guarding.
+# XDG_RUNTIME_DIR is the right place for that: a 0700 tmpfs owned by the user,
+# under ancestors owned by root, created by logind before the session starts.
+# The bytes then come back into the state directory through the descriptor.
+open_runtime_dir() {
+  local dir=${XDG_RUNTIME_DIR:-} fd next base
+  [[ -n $dir ]] || die "$E_RUNTIME" "XDG_RUNTIME_DIR is not set"
+  if [[ -L $dir ]]; then
+    die "$E_RUNTIME" "XDG_RUNTIME_DIR is a symlink"
+  fi
+  exec {fd}< "$dir" || die "$E_RUNTIME" "cannot open XDG_RUNTIME_DIR ($dir)"
+  verify_dir "$fd" "XDG_RUNTIME_DIR" "$E_RUNTIME"
+
+  base="/proc/$$/fd/$fd"
+  if [[ -L $base/$STAGE_DIR ]]; then
+    die "$E_RUNTIME" "$dir/$STAGE_DIR is a symlink"
+  fi
+  if [[ ! -e $base/$STAGE_DIR ]]; then
+    mkdir -m 700 "$base/$STAGE_DIR" || die "$E_RUNTIME" "cannot create $dir/$STAGE_DIR"
+  fi
+  exec {next}< "$base/$STAGE_DIR" || die "$E_RUNTIME" "cannot open $dir/$STAGE_DIR"
+  verify_dir "$next" "$dir/$STAGE_DIR" "$E_RUNTIME"
+  exec {fd}<&-
+
+  RUNTIME_BASE="/proc/$$/fd/$next"
+  RUNTIME_HUMAN="$dir/$STAGE_DIR"
+}
+
+# A bare file name, and one of ours. Nothing here should ever be asked to
+# touch a path, so a name carrying one is a bug worth failing on rather than
+# sanitising quietly.
+check_render_name() {
+  local name=${1:-}
+  [[ -n $name ]] || die "$E_USAGE" "missing render name"
+  case $name in
+    */*) die "$E_USAGE" "not a bare file name: $name" ;;
+  esac
+  [[ $name == "$RENDER_PREFIX"*.png ]] \
+    || die "$E_USAGE" "not a Glow Studio render name: $name"
+}
+
+# Runs before the render, not after it, so an unsafe state directory is
+# reported in the time it takes to click the button rather than after a 6K
+# canvas has been rasterised for nothing.
+cmd_stage() {
+  open_state_dir
+  open_runtime_dir
+
+  # Whatever is sitting there is ours to remove and is not to be written
+  # through: a leftover from a crashed render, or a symlink someone dropped in
+  # while we were not looking. rm unlinks the name either way, it never
+  # follows it. The create that follows is O_CREAT|O_EXCL courtesy of
+  # noclobber, so it fails rather than reusing anything that came back.
+  rm -f -- "$RUNTIME_BASE/$STAGE_NAME" \
+    || die "$E_RUNTIME" "cannot clear the staging file in $RUNTIME_HUMAN"
+  ( set -C; : > "$RUNTIME_BASE/$STAGE_NAME" ) \
+    || die "$E_RUNTIME" "cannot create the staging file in $RUNTIME_HUMAN"
+
+  printf '%s\n' "$RUNTIME_HUMAN/$STAGE_NAME"
+}
+
+# Publication: the staged bytes are copied into the state directory through
+# the descriptor. The chain is walked again from scratch here rather than
+# trusting the one `stage` checked — a fresh walk is cheap, and it is the
+# check that decides whether anything is published at all.
+cmd_publish() {
+  local final=$1 info uid size
+  check_render_name "$final"
+  open_runtime_dir
+
+  # The symlink test first, so the tests after it are reading the file we
+  # left there and not something it points at.
+  local stage="$RUNTIME_BASE/$STAGE_NAME"
+  if [[ -L $stage ]]; then
+    die "$E_RENDER" "the staged render is a symlink"
+  fi
+  [[ -f $stage ]] || die "$E_RENDER" "no staged render in $RUNTIME_HUMAN"
+  info=$(stat -c '%u %s' "$stage") || die "$E_RENDER" "cannot stat the staged render"
+  read -r uid size <<<"$info"
+  [[ $uid == "$(id -u)" ]] || die "$E_RENDER" "the staged render is owned by uid $uid, not you"
+  (( size > 0 )) || die "$E_RENDER" "the staged render is empty"
+
+  open_state_dir
+  # noclobber again: the name carries a timestamp and a counter, so an
+  # existing one means something else is using the name, and publishing over
+  # it is not this script's call to make.
+  ( set -C; cat -- "$stage" > "$STATE_BASE/$final" ) \
+    || die "$E_STATE" "cannot publish $final into $STATE_PATH"
+  rm -f -- "$stage"
+
+  printf '%s\n' "$STATE_PATH/$final"
+}
+
+# Everything but the one render the background symlink points at. Confined to
+# the pinned directory, so the worst a redirected ancestor can do is make this
+# refuse to run.
+cmd_sweep() {
+  local keep=$1 f name
+  check_render_name "$keep"
+  open_state_dir
+
+  shopt -s nullglob
+  for f in "$STATE_BASE/$RENDER_PREFIX"*.png; do
+    name=${f##*/}
+    [[ $name == "$keep" ]] && continue
+    # Only files this plugin could have written. A symlink wearing the name is
+    # left alone rather than unlinked: it is not ours, and nothing here needs
+    # to be the thing that tidies it up.
+    [[ -L $f ]] && continue
+    [[ -f $f ]] || continue
+    rm -f -- "$f"
+  done
+}
+
+case "${1:-}" in
+  stage) cmd_stage ;;
+  publish) shift; cmd_publish "${1:-}" ;;
+  sweep) shift; cmd_sweep "${1:-}" ;;
+  *)
+    echo "usage: ${0##*/} stage | publish <name> | sweep <keep-name>" >&2
+    exit "$E_USAGE"
+    ;;
+esac
