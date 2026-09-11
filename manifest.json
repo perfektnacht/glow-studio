@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "perfektnacht.glow-studio",
   "name": "Glow Studio",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "perfektnacht",
   "description": "A glowing peg board you can draw on, pre-lit with the OMARCHY logo",
   "license": "MIT",

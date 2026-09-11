@@ -16,7 +16,9 @@ omarchy restart shell
 ```
 
 `bin/omarchy-glow-studio` wraps the same call if you'd rather have a command
-(`toggle`, `show`, `hide`) on your `PATH`.
+(`toggle`, `show`, `hide`) on your `PATH`. The other script in `bin/` is not
+for you to run — `bin/omarchy-glow-studio-wallpaper` is how the plugin does its
+own file handling, described under [Where it writes](#where-it-writes).
 
 ## Requirements
 
@@ -24,17 +26,21 @@ Omarchy 4 or newer, which provides `omarchy-shell` and the Quickshell runtime
 this is written against. Nothing is bundled, vendored, or installed on your
 behalf.
 
-Four system commands are used, all already present on an Omarchy install:
+Three system commands are used, all already present on an Omarchy install,
+plus `bash` and coreutils for the script in `bin/`:
 
 | Command | Used for | Without it |
 |---------|----------|------------|
 | `notify-send` | Saying where an export or the wallpaper landed | Both still work, just silently |
-| `mkdir` | Creating the directory an export is written to, before the first export | The export fails rather than guessing another directory |
+| `mkdir` | Creating `~/Pictures` before the first export | The export fails rather than guessing another directory |
 | `omarchy` | Setting the wallpaper from the toolbar | The button reports that it failed; nothing else changes |
-| `find` | Deleting the previous wallpaper render after a new one is applied | Spent renders accumulate in the state directory |
 
 Nothing else is read or written, and the plugin makes no network connections
-of any kind. Three paths belong to it:
+of any kind.
+
+## Where it writes
+
+Four paths belong to it:
 
 - `~/.local/state/omarchy/glow-studio.json` — your board as you draw it, plus
   the export size and OLED choice
@@ -42,7 +48,27 @@ of any kind. Three paths belong to it:
   wallpaper you applied. The desktop background is a symlink to it, so it has
   to stay put; a new apply writes a new file and deletes the one before it,
   leaving exactly one
+- `$XDG_RUNTIME_DIR/glow-studio/render.png` — a wallpaper render on its way to
+  the line above, replaced on every apply and gone once it lands
 - `~/Pictures/glow-studio-<size>-<timestamp>.png` — exports, only when you ask
+
+Everything the plugin creates, publishes or deletes in
+`~/.local/state/omarchy` goes through `bin/omarchy-glow-studio-wallpaper`,
+which opens that directory one component at a time — `~` then `.local` then
+`state` then `omarchy` — refusing a symlink at any step and refusing any
+component it does not own or that group or others can write, and then does its
+work through the descriptor it opened rather than through the path again. The
+point is that a path is resolved afresh on every use, so a symlink dropped
+anywhere along one can send a write, or a deletion, somewhere the plugin never
+meant to touch; a descriptor is pinned to the directory it was opened on and
+cannot be redirected afterwards.
+
+Renders are staged in `$XDG_RUNTIME_DIR` — a mode-0700 tmpfs owned by you,
+under directories owned by root — because the render itself is written by Qt,
+which takes a file name and not a descriptor. The bytes are then copied into
+the state directory through the descriptor. If any of those checks fail
+nothing is written and nothing is deleted: the wallpaper is refused, with a
+notification saying which check it was.
 
 If you ran this plugin under its previous name, the board saved back then is
 read once and carried over the first time you open Glow Studio. The old file is
@@ -134,7 +160,8 @@ at whichever size is selected in the toolbar. Your choice is remembered.
 `Set Wallpaper` renders the board the same way, at the same selected size, and
 hands the file to `omarchy theme bg set` — Omarchy's own background command —
 so the desktop changes immediately and the choice survives a reboot. The
-render lands in `~/.local/state/omarchy/` under a fresh name each time — a
+render lands in `~/.local/state/omarchy/` (see [Where it writes](#where-it-writes))
+under a fresh name each time — a
 timestamp plus a counter, since a 2K render can finish inside the same second —
 because the background system records a symlink to the file it is given and
 ignores a path it is already showing: overwriting one fixed file in place would

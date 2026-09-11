@@ -29,6 +29,34 @@ Item {
   readonly property string stateDir: home + "/.local/state/omarchy"
   readonly property string statePath: stateDir + "/glow-studio.json"
 
+  // Every create, publish and delete this plugin performs in the state
+  // directory goes through bin/omarchy-glow-studio-wallpaper, which opens
+  // that directory one component at a time — refusing a symlink at each step,
+  // and refusing any component it does not own — and then works through the
+  // descriptor it opened rather than through the path again. Done by path,
+  // the kernel resolves ~/.local/state before every one of those operations,
+  // so a symlink planted there would redirect both the render and the
+  // deletion of the render before it. QML has no way to hold a descriptor —
+  // Process runs commands — which is why this lives in a script.
+  //
+  // Found relative to this file rather than on PATH: it ships with the plugin
+  // and is not something anyone installs separately. Run as an argument to
+  // bash rather than executed directly, so that a plugin unpacked without its
+  // execute bits still works, and so that a missing script comes back as an
+  // ordinary non-zero exit — a Process that never starts is a button that
+  // says "Setting…" forever.
+  readonly property string helperPath:
+    decodeURIComponent(Qt.resolvedUrl("bin/omarchy-glow-studio-wallpaper")
+                       .toString().replace(/^file:\/\//, ""))
+
+  // Renders are staged here before they are published. grabToImage saves to a
+  // file name and cannot be handed a descriptor, so that one write is aimed
+  // outside the directory the helper is guarding: XDG_RUNTIME_DIR is a 0700
+  // tmpfs owned by the session user under root-owned ancestors. The helper
+  // then copies the bytes into place through its descriptor.
+  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
+  readonly property string wallpaperStagePath: runtimeDir + "/glow-studio/render.png"
+
   // Where a wallpaper render lands. A fresh timestamped name per apply, not
   // one fixed path: `omarchy theme bg set` records a symlink to the file it
   // is handed, and the shell's background plugin ignores a set whose path
@@ -45,9 +73,11 @@ Item {
   // name is precisely the no-op this whole scheme exists to avoid.
   property int wallpaperSerial: 0
 
-  function wallpaperRenderPath() {
+  // A bare name rather than a path: it is handed to the helper, which
+  // resolves it against the directory it opened and nothing else.
+  function wallpaperRenderName() {
     root.wallpaperSerial += 1
-    return root.stateDir + "/" + root.wallpaperPrefix
+    return root.wallpaperPrefix
       + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss")
       + "-" + root.wallpaperSerial + ".png"
   }
@@ -677,21 +707,33 @@ Item {
   // from the screen: the board is vector-ish (discs on a grid), so painting it
   // again at a bigger peg pitch costs one repaint and gives clean edges, where
   // upscaling a 2220px grab to 6K would just be a blurry 2220px grab.
-  // True from the click until the render is written: exportLoader.active
-  // alone leaves a gap, because the loader only goes live when the mkdir
-  // exits, and both toolbar buttons are still pressable during it.
+  // True from the click until the work is done: exportLoader.active alone
+  // leaves gaps, because the loader only goes live once the step before it
+  // exits, and both toolbar buttons are still pressable during those. A
+  // wallpaper stays busy through publication and through `omarchy theme bg
+  // set` too — a second apply mid-flight would race the first for the one
+  // staging file.
   readonly property bool exportBusy: exportProc.running || exportLoader.active
+    || publishProc.running || wallpaperProc.running
 
   function exportPng(forWallpaper) {
     if (root.exportBusy) return   // one at a time; 6K is 75MB of buffer
     exportProc.wallpaper = forWallpaper
+    exportProc.finalName = forWallpaper ? root.wallpaperRenderName() : ""
+    // A wallpaper renders into the staging file and is published from there;
+    // an export is the user's own file in their own pictures directory and
+    // still goes straight to its name.
     exportProc.outputPath = forWallpaper
-      ? root.wallpaperRenderPath()
+      ? root.wallpaperStagePath
       : root.home + "/Pictures/glow-studio-"
         + root.exportPresets[root.exportPreset].label.toLowerCase() + "-"
         + Qt.formatDateTime(new Date(), "yyyyMMdd-HHmmss") + ".png"
-    exportProc.command = ["mkdir", "-p",
-      forWallpaper ? root.stateDir : root.home + "/Pictures"]
+    // `stage` checks the state directory before the render rather than after
+    // it, so an unsafe one is reported in the time it takes to click the
+    // button instead of after a 6K canvas has been rasterised for nothing.
+    exportProc.command = forWallpaper
+      ? ["bash", root.helperPath, "stage"]
+      : ["mkdir", "-p", root.home + "/Pictures"]
     exportProc.running = true
   }
 
@@ -702,29 +744,74 @@ Item {
       ok ? path : "Could not write " + path])
   }
 
-  // Hand a finished wallpaper render to Omarchy's own background command
-  // rather than reaching into Hyprland or the theme system from here:
-  // `omarchy theme bg set` does both halves — points the shell's background
-  // symlink at the file, and updates the running desktop — so the wallpaper
-  // sticks across reboots and keeps working with the background switcher
-  // afterwards.
-  function applyWallpaper(ok, path) {
+  function reportWallpaperFailure(detail) {
+    Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
+      "Wallpaper not set", detail])
+  }
+
+  // Which check the helper refused on. It reports that as an exit status
+  // because a Process gives us a status and nothing else; the detail behind
+  // each one goes to its stderr, which is the shell log.
+  function wallpaperFailure(exitCode) {
+    if (exitCode === 3) return "~/.local/state/omarchy did not pass its owner and symlink check"
+    if (exitCode === 4) return "no usable XDG_RUNTIME_DIR to render into"
+    if (exitCode === 5) return "the render did not survive its check"
+    return "glow-studio-wallpaper exited with " + exitCode
+  }
+
+  // Publish the staged render, then hand the published file to Omarchy's own
+  // background command rather than reaching into Hyprland or the theme system
+  // from here: `omarchy theme bg set` does both halves — points the shell's
+  // background symlink at the file, and updates the running desktop — so the
+  // wallpaper sticks across reboots and keeps working with the background
+  // switcher afterwards.
+  function applyWallpaper(ok) {
     if (!ok) {
-      Quickshell.execDetached(["notify-send", "-a", "Glow Studio",
-        "Wallpaper not set", "Could not write " + path])
+      root.reportWallpaperFailure("Could not render to " + root.wallpaperStagePath)
       return
     }
-    wallpaperProc.imagePath = path
-    wallpaperProc.command = ["omarchy", "theme", "bg", "set", path]
-    wallpaperProc.running = true
+    publishProc.command = ["bash", root.helperPath, "publish", exportProc.finalName]
+    publishProc.running = true
   }
 
   Process {
     id: exportProc
     property string outputPath: ""
+    // The name the render will be published under, fixed at the click so the
+    // publish and the sweep afterwards agree on it.
+    property string finalName: ""
     property bool wallpaper: false
     command: ["mkdir", "-p", root.home + "/Pictures"]
-    onExited: exportLoader.active = true
+    onExited: function(exitCode) {
+      // A refused state directory stops the wallpaper here, before anything
+      // is rendered. An export is not gated the same way: mkdir -p on
+      // ~/Pictures failing is reported by the write that follows it.
+      if (wallpaper && exitCode !== 0) {
+        root.reportWallpaperFailure(root.wallpaperFailure(exitCode))
+        return
+      }
+      exportLoader.active = true
+    }
+  }
+
+  // Copies the staged render into the state directory through the descriptor
+  // the helper opens, after checking that what was staged is still the
+  // regular file it left there. The directory is walked again from scratch
+  // rather than trusting the walk `stage` did: it is that walk, not the
+  // earlier one, that decides whether anything is published at all.
+  Process {
+    id: publishProc
+    command: ["true"]
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.reportWallpaperFailure(root.wallpaperFailure(exitCode))
+        return
+      }
+      var published = root.stateDir + "/" + exportProc.finalName
+      wallpaperProc.imagePath = published
+      wallpaperProc.command = ["omarchy", "theme", "bg", "set", published]
+      wallpaperProc.running = true
+    }
   }
 
   Process {
@@ -740,18 +827,16 @@ Item {
       // Only once the symlink points at the new render: until then the old
       // one is still the desktop background and must not be removed.
       if (exitCode === 0) {
-        sweepProc.command = ["find", root.stateDir, "-maxdepth", "1", "-type", "f",
-          "-name", root.wallpaperPrefix + "*.png",
-          "!", "-name", imagePath.substring(imagePath.lastIndexOf("/") + 1),
-          "-delete"]
+        sweepProc.command = ["bash", root.helperPath, "sweep", exportProc.finalName]
         sweepProc.running = true
       }
     }
   }
 
-  // Drops every wallpaper render but the one currently symlinked. An
-  // argument array like every other command here — the name pattern is
-  // find's own glob, never a shell string.
+  // Drops every wallpaper render but the one currently symlinked. The name
+  // to keep is passed as an argument, never as a shell string, and the helper
+  // matches and unlinks inside the directory it opened — the worst a
+  // redirected ancestor can do here is make this refuse to run.
   Process {
     id: sweepProc
     command: ["true"]
@@ -811,13 +896,13 @@ Item {
         var scale = root.grabScale > 0 ? root.grabScale : 1
         var started = grabToImage(function(result) {
           var ok = result.saveToFile(path)
-          if (exportProc.wallpaper) root.applyWallpaper(ok, path)
+          if (exportProc.wallpaper) root.applyWallpaper(ok)
           else root.reportExport(ok, path)
           exportLoader.active = false
         }, Qt.size(Math.round(preset.width / scale),
                    Math.round(preset.height / scale)))
         if (!started) {
-          if (exportProc.wallpaper) root.applyWallpaper(false, path)
+          if (exportProc.wallpaper) root.applyWallpaper(false)
           else root.reportExport(false, path)
           exportLoader.active = false
         }
